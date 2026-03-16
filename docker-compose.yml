@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  codex-register:
+    build: .
+    container_name: codex-register
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Optional: Add proxy if needed
+    # environment:
+    #   - HTTP_PROXY=http://your-proxy:port
+    #   - HTTPS_PROXY=http://your-proxy:port

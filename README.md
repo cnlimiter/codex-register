@@ -69,6 +69,58 @@ python webui.py --debug
 
 启动后访问 http://127.0.0.1:8000
 
+## Docker 部署（推荐）
+
+### 环境要求
+
+- Docker
+- Docker Compose
+
+### 快速部署
+
+```bash
+# 克隆项目
+git clone https://github.com/db52/codex-register.git
+cd codex-register
+
+# 启动服务
+docker-compose up -d
+```
+
+服务启动后访问 http://localhost:8000
+
+### Docker Compose 说明
+
+默认配置：
+- 端口：8000
+- 数据持久化：`./data` 目录
+- 日志持久化：`./logs` 目录
+
+### 使用代理
+
+如需在容器中使用代理，编辑 `docker-compose.yml`：
+
+```yaml
+services:
+  codex-register:
+    environment:
+      - HTTP_PROXY=http://your-proxy:port
+      - HTTPS_PROXY=http://your-proxy:port
+```
+
+### 常用命令
+
+```bash
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+
+# 重新构建
+docker-compose build --no-cache
+```
+
 ## 打包为可执行文件
 
 ```bash
