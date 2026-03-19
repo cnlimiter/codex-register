@@ -36,6 +36,16 @@ STATIC_DIR = _RESOURCE_ROOT / "static"
 TEMPLATES_DIR = _RESOURCE_ROOT / "templates"
 
 
+def _build_static_asset_version(static_dir: Path) -> str:
+    """基于静态文件最后修改时间生成版本号，避免部署后浏览器继续使用旧缓存。"""
+    latest_mtime = 0
+    if static_dir.exists():
+        for path in static_dir.rglob("*"):
+            if path.is_file():
+                latest_mtime = max(latest_mtime, int(path.stat().st_mtime))
+    return str(latest_mtime or 1)
+
+
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例"""
     settings = get_settings()
@@ -80,6 +90,7 @@ def create_app() -> FastAPI:
 
     # 模板引擎
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    templates.env.globals["static_version"] = _build_static_asset_version(STATIC_DIR)
 
     def _auth_token(password: str) -> str:
         secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
