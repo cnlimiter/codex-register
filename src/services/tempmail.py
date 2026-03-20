@@ -62,6 +62,13 @@ class TempmailService(BaseEmailService):
         self._email_cache: Dict[str, Dict[str, Any]] = {}
         self._last_check_time: float = 0
 
+        for email_info in self.config.get("preloaded_accounts", []):
+            if not isinstance(email_info, dict):
+                continue
+            email = str(email_info.get("email") or "").strip()
+            if email:
+                self._email_cache[email] = email_info
+
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         创建新的临时邮箱

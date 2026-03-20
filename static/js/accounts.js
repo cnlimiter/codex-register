@@ -570,6 +570,24 @@ async function viewAccount(id) {
                     </span>
                 </div>
                 <div class="info-item">
+                    <span class="label">邮箱登录账号</span>
+                    <span class="value">
+                        ${account.email_login
+                            ? `${escapeHtml(account.email_login)}
+                               <button class="btn btn-ghost btn-sm" onclick="copyToClipboard('${escapeHtml(account.email_login)}')" title="复制">??</button>`
+                            : '-'}
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="label">邮箱登录密码</span>
+                    <span class="value">
+                        ${account.email_password
+                            ? `<code style="font-size: 0.75rem;">${escapeHtml(account.email_password)}</code>
+                               <button class="btn btn-ghost btn-sm" onclick="copyToClipboard('${escapeHtml(account.email_password)}')" title="复制">??</button>`
+                            : '-'}
+                    </span>
+                </div>
+                <div class="info-item">
                     <span class="label">邮箱服务</span>
                     <span class="value">${getServiceTypeText(account.email_service)}</span>
                 </div>

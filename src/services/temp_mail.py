@@ -68,6 +68,13 @@ class TempMailService(BaseEmailService):
         # 邮箱缓存：email -> {jwt, address}
         self._email_cache: Dict[str, Dict[str, Any]] = {}
 
+        for email_info in self.config.get("preloaded_accounts", []):
+            if not isinstance(email_info, dict):
+                continue
+            email = str(email_info.get("email") or "").strip()
+            if email:
+                self._email_cache[email] = email_info
+
     def _decode_mime_header(self, value: str) -> str:
         """解码 MIME 头，兼容 RFC 2047 编码主题。"""
         if not value:

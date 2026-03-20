@@ -17,6 +17,7 @@ from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
 from .http_client import OpenAIHTTPClient, HTTPClientError
+from .email_access import build_email_access_snapshot, EMAIL_ACCESS_KEY
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
 from ..database import crud
 from ..database.session import get_db
@@ -161,6 +162,20 @@ class RegistrationEngine:
             logger.warning(message)
         else:
             logger.info(message)
+
+    def _build_account_extra_data(self, base_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """构建落库用的扩展信息，附带邮箱访问凭证快照。"""
+        metadata = dict(base_metadata or {})
+        email = self.email or (self.email_info or {}).get("email") or ""
+        snapshot = build_email_access_snapshot(
+            self.email_service.service_type,
+            email=email,
+            email_info=self.email_info,
+            service_config=getattr(self.email_service, "config", None),
+        )
+        if snapshot:
+            metadata[EMAIL_ACCESS_KEY] = snapshot
+        return metadata
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
@@ -407,7 +422,9 @@ class RegistrationEngine:
                         email_service=self.email_service.service_type.value,
                         email_service_id=self.email_info.get("service_id") if self.email_info else None,
                         status="failed",
-                        extra_data={"register_failed_reason": "email_already_registered_on_openai"}
+                        extra_data=self._build_account_extra_data({
+                            "register_failed_reason": "email_already_registered_on_openai"
+                        })
                     )
                     self._log(f"已在数据库中标记邮箱 {self.email} 为已注册状态")
         except Exception as e:
@@ -854,6 +871,7 @@ class RegistrationEngine:
         try:
             # 获取默认 client_id
             settings = get_settings()
+            extra_data = self._build_account_extra_data(result.metadata)
 
             with get_db() as db:
                 # 保存账户信息
@@ -871,7 +889,7 @@ class RegistrationEngine:
                     refresh_token=result.refresh_token,
                     id_token=result.id_token,
                     proxy_used=self.proxy_url,
-                    extra_data=result.metadata,
+                    extra_data=extra_data,
                     source=result.source
                 )
 

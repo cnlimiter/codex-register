@@ -21,6 +21,7 @@ from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upl
 from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub2api
 
 from ...core.dynamic_proxy import get_proxy_url_for_task
+from ...core.email_access import get_email_access_snapshot, inject_email_access_config
 from ...database import crud
 from ...database.models import Account
 from ...database.session import get_db
@@ -50,6 +51,8 @@ class AccountResponse(BaseModel):
     id: int
     email: str
     password: Optional[str] = None
+    email_login: Optional[str] = None
+    email_password: Optional[str] = None
     client_id: Optional[str] = None
     email_service: str
     account_id: Optional[str] = None
@@ -125,10 +128,13 @@ def resolve_account_ids(
 
 def account_to_response(account: Account) -> AccountResponse:
     """转换 Account 模型为响应模型"""
+    email_access = get_email_access_snapshot(account.extra_data)
     return AccountResponse(
         id=account.id,
         email=account.email,
         password=account.password,
+        email_login=email_access.get("email") or account.email,
+        email_password=email_access.get("password"),
         client_id=account.client_id,
         email_service=account.email_service,
         account_id=account.account_id,
@@ -345,9 +351,12 @@ async def export_accounts_json(request: BatchExportRequest):
 
         export_data = []
         for acc in accounts:
+            email_access = get_email_access_snapshot(acc.extra_data)
             export_data.append({
                 "email": acc.email,
                 "password": acc.password,
+                "email_login": email_access.get("email") or acc.email,
+                "email_password": email_access.get("password"),
                 "client_id": acc.client_id,
                 "account_id": acc.account_id,
                 "workspace_id": acc.workspace_id,
@@ -395,7 +404,7 @@ async def export_accounts_csv(request: BatchExportRequest):
 
         # 写入表头
         writer.writerow([
-            "ID", "Email", "Password", "Client ID",
+            "ID", "Email", "Password", "Email Login", "Email Password", "Client ID",
             "Account ID", "Workspace ID",
             "Access Token", "Refresh Token", "ID Token", "Session Token",
             "Email Service", "Status", "Registered At", "Last Refresh", "Expires At"
@@ -403,10 +412,13 @@ async def export_accounts_csv(request: BatchExportRequest):
 
         # 写入数据
         for acc in accounts:
+            email_access = get_email_access_snapshot(acc.extra_data)
             writer.writerow([
                 acc.id,
                 acc.email,
                 acc.password or "",
+                email_access.get("email") or acc.email,
+                email_access.get("password") or "",
                 acc.client_id or "",
                 acc.account_id or "",
                 acc.workspace_id or "",
@@ -1060,6 +1072,11 @@ async def get_account_inbox_code(account_id: int):
         config = _build_inbox_config(db, service_type, account.email)
         if config is None:
             return {"success": False, "error": "未找到可用的邮箱服务配置"}
+        config = inject_email_access_config(
+            service_type,
+            config,
+            get_email_access_snapshot(account.extra_data),
+        )
 
         try:
             svc = EmailServiceFactory.create(service_type, config)

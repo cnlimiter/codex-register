@@ -55,6 +55,10 @@ class DuckMailService(BaseEmailService):
         self._accounts_by_id: Dict[str, Dict[str, Any]] = {}
         self._accounts_by_email: Dict[str, Dict[str, Any]] = {}
 
+        for account_info in self.config.get("preloaded_accounts", []):
+            if isinstance(account_info, dict):
+                self._cache_account(account_info)
+
     def _build_headers(
         self,
         token: Optional[str] = None,
