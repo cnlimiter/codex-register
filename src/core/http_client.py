@@ -282,7 +282,7 @@ class OpenAIHTTPClient(HTTPClient):
             loc = loc_match.group(1) if loc_match else None
 
             # 检查是否支持
-            if loc in ["CN", "HK", "MO", "TW"]:
+            if loc in ["CN", "HK", "MO"]:
                 return False, loc
             return True, loc
 
