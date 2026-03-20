@@ -187,12 +187,21 @@ class ApiClient {
         };
 
         const finalOptions = { ...defaultOptions, ...options };
+        const timeoutMs = Number(finalOptions.timeoutMs || 0);
+        delete finalOptions.timeoutMs;
 
         if (finalOptions.body && typeof finalOptions.body === 'object') {
             finalOptions.body = JSON.stringify(finalOptions.body);
         }
 
+        let timeoutId = null;
         try {
+            if (timeoutMs > 0) {
+                const controller = new AbortController();
+                finalOptions.signal = controller.signal;
+                timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            }
+
             const response = await fetch(url, finalOptions);
             const data = await response.json().catch(() => ({}));
 
@@ -205,11 +214,19 @@ class ApiClient {
 
             return data;
         } catch (error) {
+            if (error.name === 'AbortError') {
+                const timeoutError = new Error('请求超时，请稍后重试');
+                throw timeoutError;
+            }
             // 网络错误处理
             if (!error.response) {
                 toast.error('网络连接失败，请检查网络');
             }
             throw error;
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
         }
     }
 

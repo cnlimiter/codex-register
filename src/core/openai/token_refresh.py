@@ -57,6 +57,35 @@ class TokenRefreshManager:
         session = cffi_requests.Session(impersonate="chrome120", proxy=self.proxy_url)
         return session
 
+    def _parse_oauth_error(self, response: cffi_requests.Response) -> str:
+        """解析 OAuth 错误信息"""
+        body_text = (response.text or "").strip()
+        error_message = ""
+
+        try:
+            body = response.json()
+            error_obj = body.get("error") if isinstance(body, dict) else None
+            if isinstance(error_obj, dict):
+                error_message = str(error_obj.get("message") or "").strip()
+            elif isinstance(body, dict):
+                error_message = str(body.get("error_description") or body.get("message") or "").strip()
+        except Exception:
+            pass
+
+        error_lower = error_message.lower()
+        if "refresh token has already been used" in error_lower:
+            return "OAuth refresh_token 已失效（一次性令牌已被使用），请重新登录该账号后再上传 CPA"
+        if response.status_code == 401:
+            if error_message:
+                return f"OAuth token 刷新失败: {error_message}"
+            else:
+                return "OAuth token 刷新失败: refresh_token 无效或已过期，请重新登录账号"
+        if error_message:
+            return f"OAuth token 刷新失败: {error_message}"
+        if body_text:
+            return f"OAuth token 刷新失败: HTTP {response.status_code}, 响应: {body_text[:200]}"
+        return f"OAuth token 刷新失败: HTTP {response.status_code}"
+
     def refresh_by_session_token(self, session_token: str) -> TokenRefreshResult:
         """
         使用 Session Token 刷新
@@ -167,7 +196,7 @@ class TokenRefreshManager:
             )
 
             if response.status_code != 200:
-                result.error_message = f"OAuth token 刷新失败: HTTP {response.status_code}"
+                result.error_message = self._parse_oauth_error(response)
                 logger.warning(f"{result.error_message}, 响应: {response.text[:200]}")
                 return result
 
