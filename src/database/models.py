@@ -39,6 +39,8 @@ class Account(Base):
     refresh_token = Column(Text)
     id_token = Column(Text)
     session_token = Column(Text)  # 会话令牌（优先刷新方式）
+    token_sync_status = Column(String(20), default='not_ready')  # 'not_ready', 'pending', 'synced'
+    token_sync_updated_at = Column(DateTime, default=datetime.utcnow)
     client_id = Column(String(255))  # OAuth Client ID
     account_id = Column(String(255))
     workspace_id = Column(String(255))
@@ -80,7 +82,9 @@ class Account(Base):
             'subscription_type': self.subscription_type,
             'subscription_at': self.subscription_at.isoformat() if self.subscription_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'token_sync_status': self.token_sync_status,
+            'token_sync_updated_at': self.token_sync_updated_at.isoformat() if self.token_sync_updated_at else None,
         }
 
 

@@ -110,6 +110,8 @@ class DatabaseSessionManager:
             ("accounts", "subscription_type", "VARCHAR(20)"),
             ("accounts", "subscription_at", "DATETIME"),
             ("accounts", "cookies", "TEXT"),
+            ("accounts", "token_sync_status", "VARCHAR(20) DEFAULT 'not_ready'"),
+            ("accounts", "token_sync_updated_at", "DATETIME"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
         ]

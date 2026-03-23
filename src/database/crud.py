@@ -10,6 +10,15 @@ from sqlalchemy import and_, or_, desc, asc, func
 from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService
 
 
+TOKEN_FIELD_NAMES = ("access_token", "refresh_token", "id_token", "session_token")
+
+
+def _default_token_sync_status(token_values: Dict[str, Any]) -> str:
+    """根据当前持久化的 token 内容推导同步状态。"""
+    has_token = any(bool(token_values.get(field)) for field in TOKEN_FIELD_NAMES)
+    return "pending" if has_token else "not_ready"
+
+
 # ============================================================================
 # 账户 CRUD
 # ============================================================================
@@ -31,9 +40,16 @@ def create_account(
     expires_at: Optional['datetime'] = None,
     extra_data: Optional[Dict[str, Any]] = None,
     status: Optional[str] = None,
-    source: Optional[str] = None
+    source: Optional[str] = None,
+    token_sync_status: Optional[str] = None,
 ) -> Account:
     """创建新账户"""
+    token_values = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "id_token": id_token,
+        "session_token": session_token,
+    }
     db_account = Account(
         email=email,
         password=password,
@@ -51,7 +67,9 @@ def create_account(
         extra_data=extra_data or {},
         status=status or 'active',
         source=source or 'register',
-        registered_at=datetime.utcnow()
+        registered_at=datetime.utcnow(),
+        token_sync_status=token_sync_status or _default_token_sync_status(token_values),
+        token_sync_updated_at=datetime.utcnow(),
     )
     db.add(db_account)
     db.commit()
@@ -107,6 +125,14 @@ def update_account(
     db_account = get_account_by_id(db, account_id)
     if not db_account:
         return None
+
+    touches_token = any(
+        field in kwargs and kwargs[field] is not None
+        for field in TOKEN_FIELD_NAMES
+    )
+    if touches_token:
+        kwargs.setdefault("token_sync_status", _default_token_sync_status(kwargs))
+        kwargs["token_sync_updated_at"] = datetime.utcnow()
 
     for key, value in kwargs.items():
         if hasattr(db_account, key) and value is not None:
