@@ -552,6 +552,12 @@ function connectWebSocket(taskUuid) {
                 const logType = getLogType(data.message);
                 addLog(logType, data.message);
             } else if (data.type === 'status') {
+                if (data.email) {
+                    elements.taskEmail.textContent = data.email;
+                }
+                if (data.email_service) {
+                    elements.taskService.textContent = getServiceTypeText(data.email_service);
+                }
                 updateTaskStatus(data.status);
 
                 // 检查是否完成
@@ -1306,7 +1312,7 @@ function connectBatchWebSocket(batchId) {
 
             if (shouldPoll && currentBatch) {
                 console.log('切换到轮询模式');
-                startOutlookBatchPolling(currentBatch.batch_id);
+                startCurrentBatchPolling(currentBatch.batch_id);
             }
         };
 
@@ -1314,12 +1320,12 @@ function connectBatchWebSocket(batchId) {
             console.error('批量任务 WebSocket 错误:', error);
             stopBatchWebSocketHeartbeat();
             // 切换到轮询
-            startOutlookBatchPolling(batchId);
+            startCurrentBatchPolling(batchId);
         };
 
     } catch (error) {
         console.error('批量任务 WebSocket 连接失败:', error);
-        startOutlookBatchPolling(batchId);
+        startCurrentBatchPolling(batchId);
     }
 }
 
@@ -1330,6 +1336,15 @@ function disconnectBatchWebSocket() {
         batchWebSocket.close();
         batchWebSocket = null;
     }
+}
+
+function startCurrentBatchPolling(batchId) {
+    if (isOutlookBatchMode) {
+        startOutlookBatchPolling(batchId);
+        return;
+    }
+
+    startBatchPolling(batchId);
 }
 
 // 开始批量任务心跳

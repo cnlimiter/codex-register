@@ -246,9 +246,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 logger.error(f"任务不存在: {task_uuid}")
                 return
 
-            # 更新 TaskManager 状态
-            task_manager.update_status(task_uuid, "running")
-
             # 确定使用的代理
             # 如果前端传入了代理参数，使用传入的
             # 否则从代理列表或系统设置中获取
@@ -393,6 +390,9 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
             email_service = EmailServiceFactory.create(service_type, config)
 
+            # 在 WebSocket 状态里附带邮箱服务类型，前端可同步更新任务卡片
+            task_manager.update_status(task_uuid, "running", email_service=service_type.value)
+
             # 创建注册引擎 - 使用 TaskManager 的日志回调
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
@@ -504,11 +504,19 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     db, task_uuid,
                     status="completed",
                     completed_at=datetime.utcnow(),
-                    result=result.to_dict()
+                    result={
+                        **result.to_dict(),
+                        "email_service": service_type.value,
+                    }
                 )
 
                 # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "completed", email=result.email)
+                task_manager.update_status(
+                    task_uuid,
+                    "completed",
+                    email=result.email,
+                    email_service=service_type.value,
+                )
 
                 logger.info(f"注册任务完成: {task_uuid}, 邮箱: {result.email}")
             else:
@@ -521,7 +529,12 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 )
 
                 # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "failed", error=result.error_message)
+                task_manager.update_status(
+                    task_uuid,
+                    "failed",
+                    error=result.error_message,
+                    email_service=service_type.value,
+                )
 
                 logger.warning(f"注册任务失败: {task_uuid}, 原因: {result.error_message}")
 
@@ -555,7 +568,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
         task_manager.set_loop(loop)
 
     # 初始化 TaskManager 状态
-    task_manager.update_status(task_uuid, "pending")
+    task_manager.update_status(task_uuid, "pending", email_service=email_service_type)
     task_manager.add_log(task_uuid, f"{log_prefix} [系统] 任务 {task_uuid[:8]} 已加入队列" if log_prefix else f"[系统] 任务 {task_uuid[:8]} 已加入队列")
 
     try:
