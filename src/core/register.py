@@ -6,6 +6,7 @@
 import re
 import json
 import time
+import hashlib
 import logging
 import secrets
 import string
@@ -34,6 +35,18 @@ from ..config.settings import get_settings
 
 
 logger = logging.getLogger(__name__)
+
+WORKSPACE_PROBE_BACKOFF_DELAYS = (1.0, 2.0, 4.0)
+WORKSPACE_CONTINUE_URL_MAX_ATTEMPTS = len(WORKSPACE_PROBE_BACKOFF_DELAYS)
+PROVIDER_VERIFICATION_TIMEOUTS = {
+    EmailServiceType.OUTLOOK: 180,
+    EmailServiceType.IMAP_MAIL: 150,
+    EmailServiceType.MOE_MAIL: 150,
+    EmailServiceType.TEMPMAIL: 120,
+    EmailServiceType.TEMP_MAIL: 120,
+    EmailServiceType.DUCK_MAIL: 90,
+    EmailServiceType.FREEMAIL: 120,
+}
 
 
 @dataclass
@@ -79,6 +92,15 @@ class SignupFormResult:
     page_type: str = ""  # 响应中的 page.type 字段
     is_existing_account: bool = False  # 是否为已注册账号
     response_data: Dict[str, Any] = None  # 完整的响应数据
+    error_message: str = ""
+
+
+@dataclass
+class OTPValidationResult:
+    """OTP 校验结果"""
+    success: bool
+    continue_url: str = ""
+    response_data: Dict[str, Any] = None
     error_message: str = ""
 
 
@@ -133,6 +155,22 @@ class RegistrationEngine:
         self.logs: list = []
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
+        self._last_continue_url: Optional[str] = None  # 最近一次 OTP/Workspace 返回的 continue_url
+        self._last_cookie_probe: Optional[Dict[str, Any]] = None  # 最近一次 Cookie 探针快照
+
+    def close(self):
+        """关闭底层 HTTP 资源，避免批量任务长期运行时连接泄漏。"""
+        try:
+            self._close_http_client()
+        except Exception as e:
+            logger.warning(f"关闭注册引擎 HTTP 客户端失败: {e}")
+
+    def _close_http_client(self):
+        """关闭底层 HTTP 资源并清理关联会话引用。"""
+        try:
+            self.http_client.close()
+        finally:
+            self.session = None
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -245,7 +283,7 @@ class RegistrationEngine:
 
             if attempt < max_attempts:
                 time.sleep(attempt)
-                self.http_client.close()
+                self._close_http_client()
                 self.session = self.http_client.session
 
         return None
@@ -434,51 +472,111 @@ class RegistrationEngine:
             self._log(f"发送验证码失败: {e}", "error")
             return False
 
-    def _get_verification_code(self) -> Optional[str]:
+    def _get_verification_code(self, otp_sent_at: Optional[float] = None) -> Optional[str]:
         """获取验证码"""
         try:
-            self._log(f"正在等待邮箱 {self.email} 的验证码...")
+            effective_otp_sent_at = otp_sent_at if otp_sent_at is not None else self._otp_sent_at
+            verification_timeout = self._get_provider_verification_timeout()
+            if effective_otp_sent_at:
+                self._log(
+                    f"正在等待邮箱 {self.email} 的验证码... "
+                    f"(provider={self.email_service.service_type.value}, timeout={verification_timeout}s, "
+                    f"otp_sent_at={effective_otp_sent_at:.3f})"
+                )
+            else:
+                self._log(
+                    f"正在等待邮箱 {self.email} 的验证码... "
+                    f"(provider={self.email_service.service_type.value}, timeout={verification_timeout}s)"
+                )
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             code = self.email_service.get_verification_code(
                 email=self.email,
                 email_id=email_id,
-                timeout=120,
+                timeout=verification_timeout,
                 pattern=OTP_CODE_PATTERN,
-                otp_sent_at=self._otp_sent_at,
+                otp_sent_at=effective_otp_sent_at,
             )
 
             if code:
                 self._log(f"成功获取验证码: {code}")
                 return code
-            else:
-                self._log("等待验证码超时", "error")
+
+            self._log("首次等待验证码超时，尝试主动刷新邮箱会话后再重试一次...", "warning")
+            if not self._refresh_verification_session():
+                self._log("邮箱会话刷新失败，停止验证码重试", "error")
                 return None
+
+            retry_code = self.email_service.get_verification_code(
+                email=self.email,
+                email_id=email_id,
+                timeout=verification_timeout,
+                pattern=OTP_CODE_PATTERN,
+                otp_sent_at=effective_otp_sent_at,
+            )
+            if retry_code:
+                self._log(f"刷新会话后成功获取验证码: {retry_code}")
+                return retry_code
+
+            self._log("等待验证码超时", "error")
+            return None
 
         except Exception as e:
             self._log(f"获取验证码失败: {e}", "error")
             return None
 
-    def _validate_verification_code(self, code: str) -> bool:
-        """验证验证码"""
+    def _get_provider_verification_timeout(self) -> int:
+        """根据邮箱 provider 推导验证码等待超时。"""
+        settings = get_settings()
+        base_timeout = max(int(getattr(settings, "email_code_timeout", 120) or 120), 30)
+        provider_timeout = PROVIDER_VERIFICATION_TIMEOUTS.get(self.email_service.service_type, base_timeout)
+        return max(base_timeout, provider_timeout)
+
+    def _refresh_verification_session(self) -> bool:
+        """主动刷新邮箱服务会话，给验证码二次探测提供新连接状态。"""
         try:
-            code_body = f'{{"code":"{code}"}}'
+            refresh_handler = getattr(self.email_service, "refresh_session", None)
+            if callable(refresh_handler):
+                refresh_handler()
+                self._log("邮箱服务已执行 refresh_session()")
+                return True
 
-            response = self.session.post(
-                OPENAI_API_ENDPOINTS["validate_otp"],
-                headers={
-                    "referer": "https://auth.openai.com/email-verification",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
-                data=code_body,
-            )
+            refreshed = False
+            http_client = getattr(self.email_service, "http_client", None)
+            if http_client:
+                client_cls = http_client.__class__
+                proxy_url = getattr(http_client, "proxy_url", None)
+                config = getattr(http_client, "config", None)
+                try:
+                    http_client.close()
+                except Exception:
+                    pass
+                setattr(self.email_service, "http_client", client_cls(proxy_url=proxy_url, config=config))
+                refreshed = True
 
-            self._log(f"验证码校验状态: {response.status_code}")
-            return response.status_code == 200
+            providers = getattr(self.email_service, "_providers", None)
+            provider_lock = getattr(self.email_service, "_provider_lock", None)
+            if isinstance(providers, dict):
+                if provider_lock:
+                    with provider_lock:
+                        providers.clear()
+                else:
+                    providers.clear()
+                refreshed = True
 
+            reset_provider_health = getattr(self.email_service, "reset_provider_health", None)
+            if callable(reset_provider_health):
+                reset_provider_health()
+                refreshed = True
+
+            if refreshed:
+                self._log("邮箱服务底层会话已主动刷新")
+                return True
+
+            self._log("当前邮箱服务未暴露可刷新的会话句柄", "warning")
+            return False
         except Exception as e:
-            self._log(f"验证验证码失败: {e}", "error")
+            self._log(f"刷新邮箱会话失败: {e}", "warning")
             return False
 
     def _create_user_account(self) -> bool:
@@ -510,45 +608,455 @@ class RegistrationEngine:
             self._log(f"创建账户失败: {e}", "error")
             return False
 
-    def _get_workspace_id(self) -> Optional[str]:
-        """获取 Workspace ID"""
-        try:
-            auth_cookie = self.session.cookies.get("oai-client-auth-session")
-            if not auth_cookie:
-                self._log("未能获取到授权 Cookie", "error")
-                return None
+    def _fingerprint_cookie_value(self, value: Optional[str]) -> str:
+        """生成 Cookie 指纹，便于审计变化而不直接输出完整值"""
+        normalized = str(value or "").strip()
+        if not normalized:
+            return "-"
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
-            # 解码 JWT
-            import base64
-            import json as json_module
+    def _build_cookie_probe(self) -> Dict[str, str]:
+        """构建关键 Cookie 状态快照"""
+        cookies = self.session.cookies
+        auth_cookie = cookies.get("oai-client-auth-session")
+        session_cookie = cookies.get("__Secure-next-auth.session-token")
+        device_cookie = cookies.get("oai-did")
+        auth_segments = len((auth_cookie or "").split(".")) if auth_cookie else 0
+        workspace_id = None
+        workspace_source = "auth_cookie_missing"
+
+        if auth_cookie:
+            workspace_id, workspace_source = self._decode_workspace_id_from_auth_cookie(auth_cookie)
+
+        return {
+            "did": "Y" if device_cookie else "N",
+            "did_fp": self._fingerprint_cookie_value(device_cookie),
+            "auth": "Y" if auth_cookie else "N",
+            "auth_segments": str(auth_segments),
+            "auth_jwt_state": "complete_jwt" if auth_segments == 3 else "partial_or_empty",
+            "auth_fp": self._fingerprint_cookie_value(auth_cookie),
+            "next_auth": "Y" if session_cookie else "N",
+            "next_auth_fp": self._fingerprint_cookie_value(session_cookie),
+            "workspace": workspace_id or "-",
+            "workspace_source": workspace_source,
+        }
+
+    def _log_cookie_state(self, stage: str, reset_baseline: bool = False):
+        """记录关键 Cookie 状态与变化，用于观测状态机是否闭环"""
+        if not self.session:
+            self._log(f"{stage}: Session 未初始化", "warning")
+            return
+
+        probe = self._build_cookie_probe()
+
+        self._log(
+            f"{stage}: Cookie 探针 did={probe['did']}({probe['did_fp']}), "
+            f"auth={probe['auth']}(segments={probe['auth_segments']},state={probe['auth_jwt_state']},fp={probe['auth_fp']}), "
+            f"next_auth={probe['next_auth']}({probe['next_auth_fp']}), "
+            f"workspace={probe['workspace']}(source={probe['workspace_source']})"
+        )
+
+        previous_probe = None if reset_baseline else self._last_cookie_probe
+        if previous_probe:
+            changes = []
+            tracked_fields = (
+                ("did", "did"),
+                ("did_fp", "did_fp"),
+                ("auth", "auth"),
+                ("auth_segments", "auth_segments"),
+                ("auth_jwt_state", "auth_jwt_state"),
+                ("auth_fp", "auth_fp"),
+                ("next_auth", "next_auth"),
+                ("next_auth_fp", "next_auth_fp"),
+                ("workspace", "workspace"),
+                ("workspace_source", "workspace_source"),
+            )
+
+            for key, label in tracked_fields:
+                old_value = previous_probe.get(key)
+                new_value = probe.get(key)
+                if old_value != new_value:
+                    changes.append(f"{label}:{old_value}->{new_value}")
+
+            if changes:
+                self._log(f"{stage}: Cookie 变化 {'; '.join(changes)}")
+            else:
+                self._log(f"{stage}: Cookie 无变化")
+        else:
+            baseline_action = "重置" if reset_baseline else "建立"
+            self._log(f"{stage}: Cookie 探针基线已{baseline_action}")
+
+        self._last_cookie_probe = probe
+
+    def _decode_workspace_id_from_auth_cookie(self, auth_cookie: str) -> Tuple[Optional[str], str]:
+        """从授权 Cookie 中解析 Workspace ID"""
+        import base64
+        import json as json_module
+
+        cookie_value = str(auth_cookie or "").strip()
+        if not cookie_value:
+            return None, "empty_auth_cookie"
+
+        segments = cookie_value.split(".")
+        decoded_payloads = []
+
+        for index, payload in enumerate(segments[:3]):
+            raw_segment = str(payload or "").strip()
+            if not raw_segment:
+                continue
 
             try:
-                segments = auth_cookie.split(".")
-                if len(segments) < 1:
-                    self._log("授权 Cookie 格式错误", "error")
-                    return None
+                pad = "=" * ((4 - (len(raw_segment) % 4)) % 4)
+                decoded = base64.urlsafe_b64decode((raw_segment + pad).encode("ascii"))
+                parsed = json_module.loads(decoded.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    decoded_payloads.append((index, parsed))
+            except Exception:
+                continue
 
-                # 解码第一个 segment
-                payload = segments[0]
-                pad = "=" * ((4 - (len(payload) % 4)) % 4)
-                decoded = base64.urlsafe_b64decode((payload + pad).encode("ascii"))
-                auth_json = json_module.loads(decoded.decode("utf-8"))
+        if not decoded_payloads:
+            return None, f"cookie_decode_failed:segments={len(segments)}"
 
-                workspaces = auth_json.get("workspaces") or []
-                if not workspaces:
-                    self._log("授权 Cookie 里没有 workspace 信息", "error")
-                    return None
+        for index, payload in decoded_payloads:
+            workspaces = payload.get("workspaces") or []
+            if not workspaces:
+                continue
 
-                workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
+            workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
+            if workspace_id:
+                return workspace_id, f"cookie_segment_{index}"
+
+        return None, f"workspace_missing:segments={len(segments)}"
+
+    def _try_upgrade_cookie_with_continue_url(self, continue_url: str, stage: str) -> Optional[str]:
+        """访问 continue_url，驱动授权 Cookie 升级后再次解析 workspace"""
+        normalized_url = str(continue_url or "").strip()
+        if not normalized_url:
+            self._log(f"{stage}: continue_url 为空，无法升级 Cookie", "warning")
+            return None
+
+        self._last_continue_url = normalized_url
+
+        for attempt, probe_delay in enumerate(WORKSPACE_PROBE_BACKOFF_DELAYS, start=1):
+            try:
+                self._log(
+                    f"{stage}: 第 {attempt}/{WORKSPACE_CONTINUE_URL_MAX_ATTEMPTS} 次访问 continue_url 以升级授权 Cookie"
+                )
+                response = self.session.get(
+                    normalized_url,
+                    allow_redirects=True,
+                    timeout=15,
+                )
+                self._log(f"{stage}: Continue URL 响应状态 {response.status_code}")
+                self._log_cookie_state(f"{stage} 后")
+
+                workspace_id = self._get_workspace_id(log_missing=False)
+                if workspace_id:
+                    self._log(f"{stage}: Continue URL 升级后获取到 Workspace ID")
+                    return workspace_id
+
+                self._log(
+                    f"{stage}: 首次探测仍未拿到 Workspace，等待 {probe_delay:.1f}s 后执行二次探测..."
+                )
+                time.sleep(probe_delay)
+                workspace_id = self._get_workspace_id(log_missing=False)
+                if workspace_id:
+                    self._log(f"{stage}: 二次探测后获取到 Workspace ID")
+                    return workspace_id
+            except Exception as e:
+                self._log(f"{stage}: Continue URL 访问异常: {e}", "warning")
+
+            if attempt < WORKSPACE_CONTINUE_URL_MAX_ATTEMPTS:
+                self._log(
+                    f"{stage}: 第 {attempt} 次二次探测仍未拿到 Workspace，继续下一轮 Continue URL 补偿..."
+                )
+
+        self._log(f"{stage}: Continue URL 已访问但 Workspace 仍不可用", "warning")
+        return None
+
+    def _reset_oauth_session(self) -> bool:
+        """重置 OAuth 会话，用于降级登录流程"""
+        try:
+            self._log("正在重置 HTTP 会话以开始降级登录流程...")
+            if self.session:
+                self._log_cookie_state("降级流程会话重置前")
+            # 关闭旧客户端
+            self._close_http_client()
+            # 创建新客户端和会话
+            self.http_client = OpenAIHTTPClient(proxy_url=self.proxy_url)
+            self.session = self.http_client.session
+            self.session_token = None
+            self._last_continue_url = None
+            self._last_cookie_probe = None
+
+            # 生成新的 OAuth URL
+            self.oauth_start = self.oauth_manager.start_oauth()
+            self._log(f"新 OAuth URL 已生成，准备开始登录握手")
+            self._log_cookie_state("降级流程会话重置后", reset_baseline=True)
+            return True
+        except Exception as e:
+            self._log(f"重置会话失败: {e}", "error")
+            return False
+
+    def _submit_login_form(self, did: str, sen_token: Optional[str]) -> SignupFormResult:
+        """提交登录表单（screen_hint=login）"""
+        try:
+            login_body = f'{{"username":{{"value":"{self.email}","kind":"email"}},"screen_hint":"login"}}'
+
+            headers = {
+                "referer": "https://auth.openai.com/login",
+                "accept": "application/json",
+                "content-type": "application/json",
+            }
+
+            if sen_token:
+                sentinel = f'{{"p": "", "t": "", "c": "{sen_token}", "id": "{did}", "flow": "authorize_continue"}}'
+                headers["openai-sentinel-token"] = sentinel
+
+            response = self.session.post(
+                OPENAI_API_ENDPOINTS["signup"],
+                headers=headers,
+                data=login_body,
+            )
+
+            self._log(f"登录表单提交状态: {response.status_code}")
+            self._log_cookie_state("降级登录提交邮箱后")
+            if response.status_code != 200:
+                return SignupFormResult(success=False, error_message=f"登录表单提交失败: HTTP {response.status_code}")
+
+            response_data: Dict[str, Any] = {}
+            page_type = ""
+            try:
+                parsed = response.json()
+                if isinstance(parsed, dict):
+                    response_data = parsed
+                    page_type = str(parsed.get("page", {}).get("type", "") or "").strip()
+                else:
+                    self._log(f"登录表单响应不是对象: {type(parsed).__name__}，按 HTTP 200 继续无密码 OTP", "warning")
+            except Exception as parse_error:
+                self._log(f"解析登录表单响应失败: {parse_error}，按 HTTP 200 继续无密码 OTP", "warning")
+
+            if page_type:
+                self._log(f"登录表单响应页面类型: {page_type}")
+            else:
+                self._log("登录表单响应未返回 page.type，按 HTTP 200 继续无密码 OTP", "warning")
+
+            if page_type == "login_password":
+                self._log("降级登录进入 login_password，按 Issue #62 继续触发无密码 OTP")
+            elif page_type == OPENAI_PAGE_TYPES["EMAIL_OTP_VERIFICATION"]:
+                self._log("降级登录进入 email_otp_verification，继续执行无密码 OTP 闭环")
+            elif page_type:
+                self._log(f"降级登录进入 {page_type}，按 Issue #62 不做页面拦截，继续触发无密码 OTP")
+
+            return SignupFormResult(
+                success=True,
+                page_type=page_type,
+                response_data=response_data,
+            )
+        except Exception as e:
+            self._log(f"提交登录表单异常: {e}", "error")
+            return SignupFormResult(success=False, error_message=str(e))
+
+    def _send_passwordless_otp(self) -> bool:
+        """发送无密码 OTP 验证码"""
+        try:
+            self._log("正在触发无密码登录 OTP...")
+            otp_sent_at = time.time()
+            self._log_cookie_state("无密码 OTP 发送前")
+
+            response = self.session.post(
+                OPENAI_API_ENDPOINTS["send_passwordless_otp"],
+                headers={
+                    "referer": "https://auth.openai.com/login/password",
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
+                data=""
+            )
+
+            self._log(f"无密码 OTP 发送状态: {response.status_code}")
+            self._log_cookie_state("无密码 OTP 发送后")
+            if response.status_code != 200:
+                self._log(f"无密码 OTP 发送失败响应: {response.text[:200]}", "warning")
+            else:
+                self._otp_sent_at = otp_sent_at
+                self._log(f"无密码 OTP 时间戳已更新: {self._otp_sent_at:.3f}")
+            return response.status_code == 200
+        except Exception as e:
+            self._log(f"发送无密码 OTP 失败: {e}", "error")
+            return False
+
+    def _validate_verification_code(self, code: str) -> OTPValidationResult:
+        """验证验证码并返回 continue_url 等状态信息"""
+        try:
+            code_body = f'{{"code":"{code}"}}'
+
+            response = self.session.post(
+                OPENAI_API_ENDPOINTS["validate_otp"],
+                headers={
+                    "referer": "https://auth.openai.com/email-verification",
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
+                data=code_body,
+            )
+
+            self._log(f"验证码校验状态: {response.status_code}")
+            self._log_cookie_state("OTP 校验响应后")
+            if response.status_code != 200:
+                return OTPValidationResult(
+                    success=False,
+                    error_message=f"HTTP {response.status_code}: {response.text[:200]}"
+                )
+
+            try:
+                parsed = response.json()
+                if isinstance(parsed, dict):
+                    data = parsed
+                else:
+                    self._log(
+                        f"验证码校验响应不是对象: {type(parsed).__name__}，继续依据 Cookie 状态判断",
+                        "warning"
+                    )
+                    data = {}
+            except Exception as parse_error:
+                self._log(
+                    f"解析验证码校验响应失败: {parse_error}，继续依据 Cookie 状态判断",
+                    "warning"
+                )
+                data = {}
+
+            continue_url = str(data.get("continue_url") or "").strip()
+            if continue_url:
+                self._last_continue_url = continue_url
+                self._log(f"验证码校验返回 Continue URL: {continue_url[:60]}...")
+            else:
+                self._log("验证码校验成功，但响应中未包含 continue_url", "warning")
+
+            return OTPValidationResult(
+                success=True,
+                continue_url=continue_url,
+                response_data=data,
+            )
+        except Exception as e:
+            self._log(f"验证验证码失败: {e}", "error")
+            return OTPValidationResult(success=False, error_message=str(e))
+
+    def _resolve_workspace_id(self) -> Optional[str]:
+        """按主闭环优先、降级补偿兜底的顺序解析 Workspace ID"""
+        workspace_id = self._get_workspace_id(log_missing=False)
+        if workspace_id:
+            return workspace_id
+
+        if self._last_continue_url:
+            self._log("主流程首次探测未获取到 Workspace，尝试复用最近的 continue_url 升级 Cookie...")
+            workspace_id = self._try_upgrade_cookie_with_continue_url(
+                self._last_continue_url,
+                "主流程 Continue URL 补偿"
+            )
+            if workspace_id:
+                return workspace_id
+
+        self._log("主流程 Workspace 探测仍失败，切换到降级登录补偿流程...", "warning")
+        return self._fallback_to_login_flow()
+
+    def _fallback_to_login_flow(self) -> Optional[str]:
+        """
+        [核心修复] 降级到登录流程以获取 Workspace ID
+        参考 Issue #62 解决方案
+        """
+        self._log("-" * 40)
+        self._log("检测到 Cookie 缺失 Workspace，启动降级登录补偿流程...")
+
+        # 1. 重置会话
+        if not self._reset_oauth_session():
+            return None
+
+        # 2. 获取 Device ID
+        did = self._get_device_id()
+        if not did:
+            self._log("降级登录未能获取 Device ID", "error")
+            return None
+
+        # 3. Sentinel 检查
+        sen_token = self._check_sentinel(did)
+
+        # 4. 提交登录表单
+        login_res = self._submit_login_form(did, sen_token)
+        if not login_res.success:
+            self._log(f"降级登录表单失败: {login_res.error_message}", "error")
+            return None
+
+        # 5. 发送无密码 OTP
+        if not self._send_passwordless_otp():
+            self._log("降级登录未能触发无密码 OTP", "error")
+            return None
+
+        login_otp_sent_at = self._otp_sent_at
+        if not login_otp_sent_at:
+            login_otp_sent_at = time.time()
+            self._otp_sent_at = login_otp_sent_at
+            self._log("降级登录未记录到无密码 OTP 时间戳，使用当前时间兜底", "warning")
+
+        self._log(f"降级登录 OTP 时间线已校准: {login_otp_sent_at:.3f}")
+
+        # 6. 获取邮件验证码
+        self._log("正在等待新的登录验证码...")
+        code = self._get_verification_code(otp_sent_at=login_otp_sent_at)
+        if not code:
+            self._log("降级登录未获取到新的 OTP 验证码", "error")
+            return None
+
+        # 7. 验证 OTP -> GET continue_url -> 解析 Workspace
+        otp_result = self._validate_verification_code(code)
+        if not otp_result.success:
+            self._log(f"OTP 校验失败: {otp_result.error_message}", "error")
+            return None
+
+        self._log_cookie_state("降级登录 OTP 校验后")
+
+        workspace_id = self._get_workspace_id(log_missing=False)
+        if workspace_id:
+            self._log("降级登录 OTP 校验后已直接获得 Workspace，无需继续访问 continue_url")
+            return workspace_id
+
+        continue_url = str(otp_result.continue_url or "").strip()
+        if not continue_url:
+            self._log("OTP 校验成功但缺少 continue_url，无法执行 Cookie 升级", "error")
+            return None
+
+        self._log("降级登录 OTP 校验成功，开始 GET continue_url 升级 Cookie")
+        workspace_id = self._try_upgrade_cookie_with_continue_url(
+            continue_url,
+            "降级登录 Continue URL"
+        )
+        if not workspace_id:
+            self._log("降级登录闭环完成，但仍未拿到 Workspace", "error")
+        return workspace_id
+
+    def _get_workspace_id(self, log_missing: bool = True) -> Optional[str]:
+        """获取 Workspace ID"""
+        try:
+            self._log_cookie_state("解析 Workspace 前")
+            auth_cookie = self.session.cookies.get("oai-client-auth-session")
+            if not auth_cookie:
+                if log_missing:
+                    self._log("未能获取到授权 Cookie", "error")
+                return None
+
+            try:
+                workspace_id, source = self._decode_workspace_id_from_auth_cookie(auth_cookie)
                 if not workspace_id:
-                    self._log("无法解析 workspace_id", "error")
+                    if log_missing:
+                        self._log(f"授权 Cookie 中未解析到 workspace: {source}", "warning")
                     return None
 
-                self._log(f"Workspace ID: {workspace_id}")
+                self._log(f"Workspace ID 解析成功: {workspace_id} (source={source})")
                 return workspace_id
 
             except Exception as e:
-                self._log(f"解析授权 Cookie 失败: {e}", "error")
+                if log_missing:
+                    self._log(f"解析授权 Cookie 异常: {e}", "warning")
                 return None
 
         except Exception as e:
@@ -752,9 +1260,16 @@ class RegistrationEngine:
 
             # 11. 验证验证码
             self._log("11. 验证验证码...")
-            if not self._validate_verification_code(code):
-                result.error_message = "验证验证码失败"
+            otp_result = self._validate_verification_code(code)
+            if not otp_result.success:
+                result.error_message = f"验证验证码失败: {otp_result.error_message}"
                 return result
+
+            if otp_result.continue_url:
+                self._try_upgrade_cookie_with_continue_url(
+                    otp_result.continue_url,
+                    "主流程 OTP 校验"
+                )
 
             # 12. [已注册账号跳过] 创建用户账户
             if self._is_existing_account:
@@ -767,9 +1282,10 @@ class RegistrationEngine:
 
             # 13. 获取 Workspace ID
             self._log("13. 获取 Workspace ID...")
-            workspace_id = self._get_workspace_id()
+            workspace_id = self._resolve_workspace_id()
+
             if not workspace_id:
-                result.error_message = "获取 Workspace ID 失败"
+                result.error_message = "获取 Workspace ID 失败 (含降级补偿)"
                 return result
 
             result.workspace_id = workspace_id
@@ -837,6 +1353,11 @@ class RegistrationEngine:
             self._log(f"注册过程中发生未预期错误: {e}", "error")
             result.error_message = str(e)
             return result
+        finally:
+            try:
+                self._close_http_client()
+            except Exception as e:
+                logger.warning(f"关闭注册引擎 HTTP 客户端失败: {e}")
 
     def save_to_database(self, result: RegistrationResult) -> bool:
         """

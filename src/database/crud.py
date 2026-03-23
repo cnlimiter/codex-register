@@ -2,7 +2,7 @@
 数据库 CRUD 操作
 """
 
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Iterable, Set
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc, func
@@ -437,9 +437,13 @@ def get_proxies(
     return query.all()
 
 
-def get_enabled_proxies(db: Session) -> List[Proxy]:
+def get_enabled_proxies(db: Session, exclude_ids: Optional[Iterable[int]] = None) -> List[Proxy]:
     """获取所有启用的代理"""
-    return db.query(Proxy).filter(Proxy.enabled == True).all()
+    query = db.query(Proxy).filter(Proxy.enabled == True)
+    excluded: Set[int] = {int(proxy_id) for proxy_id in (exclude_ids or [])}
+    if excluded:
+        query = query.filter(~Proxy.id.in_(excluded))
+    return query.all()
 
 
 def update_proxy(
@@ -483,14 +487,18 @@ def update_proxy_last_used(db: Session, proxy_id: int) -> bool:
     return True
 
 
-def get_random_proxy(db: Session) -> Optional[Proxy]:
+def get_random_proxy(db: Session, exclude_ids: Optional[Iterable[int]] = None) -> Optional[Proxy]:
     """随机获取一个启用的代理，优先返回 is_default=True 的代理"""
     import random
+    excluded: Set[int] = {int(proxy_id) for proxy_id in (exclude_ids or [])}
     # 优先返回默认代理
-    default_proxy = db.query(Proxy).filter(Proxy.enabled == True, Proxy.is_default == True).first()
+    default_query = db.query(Proxy).filter(Proxy.enabled == True, Proxy.is_default == True)
+    if excluded:
+        default_query = default_query.filter(~Proxy.id.in_(excluded))
+    default_proxy = default_query.first()
     if default_proxy:
         return default_proxy
-    proxies = get_enabled_proxies(db)
+    proxies = get_enabled_proxies(db, exclude_ids=excluded)
     if not proxies:
         return None
     return random.choice(proxies)

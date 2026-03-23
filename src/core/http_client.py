@@ -288,7 +288,7 @@ class OpenAIHTTPClient(HTTPClient):
 
         except Exception as e:
             logger.error(f"检查 IP 地理位置失败: {e}")
-            return False, None
+            return False, str(e)
 
     def send_openai_request(
         self,
