@@ -95,6 +95,7 @@
                         <h3>代理列表</h3>
                         <div style="display: flex; gap: var(--spacing-sm);">
                             <button class="btn btn-secondary btn-sm" id="test-all-proxies-btn">🔌 测试全部</button>
+                            <button class="btn btn-danger btn-sm" id="delete-disabled-proxies-btn" disabled>🧹 删除禁用项</button>
                             <button class="btn btn-primary btn-sm" id="add-proxy-btn">➕ 添加代理</button>
                         </div>
                     </div>
@@ -115,7 +116,7 @@
                                 </thead>
                                 <tbody id="proxies-table">
                                     <tr>
-                                        <td colspan="7">
+                                        <td colspan="8">
                                             <div class="empty-state">
                                                 <div class="empty-state-icon">🌐</div>
                                                 <div class="empty-state-title">暂无代理</div>

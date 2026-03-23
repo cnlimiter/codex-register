@@ -6,6 +6,7 @@
 import urllib.parse
 import base64
 import json as json_module
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -100,7 +101,6 @@ class LoginEngine(RegistrationEngine):
     def _send_verification_code_passwordless(self) -> bool:
         """发送验证码"""
         try:
-            import time
             # 记录发送时间戳
             self._otp_sent_at = time.time()
             response = self.session.post(
@@ -118,46 +118,54 @@ class LoginEngine(RegistrationEngine):
             self._log(f"发送验证码失败: {e}", "error")
             return False
 
+    def _decode_workspace_id(self, auth_cookie: str) -> str:
+        """从授权 Cookie 中解析 Workspace ID"""
+        segments = auth_cookie.split(".")
+        if len(segments) < 1:
+            raise ValueError("授权 Cookie 格式错误")
+
+        payload = segments[0]
+        pad = "=" * ((4 - (len(payload) % 4)) % 4)
+        decoded = base64.urlsafe_b64decode((payload + pad).encode("ascii"))
+        auth_json = json_module.loads(decoded.decode("utf-8"))
+
+        workspaces = auth_json.get("workspaces") or []
+        if not workspaces:
+            raise ValueError("授权 Cookie 里没有 workspace 信息")
+
+        workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
+        if not workspace_id:
+            raise ValueError("无法解析 workspace_id")
+
+        return workspace_id
+
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
-        try:
-            auth_cookie = self.session.cookies.get("oai-client-auth-session")
-            if not auth_cookie:
-                self._log("未能获取到授权 Cookie", "error")
-                return None
+        backoff_seconds = (1, 2, 4)
+        max_attempts = len(backoff_seconds) + 1
 
+        for attempt in range(1, max_attempts + 1):
             try:
-                segments = auth_cookie.split(".")
-                if len(segments) < 1:
-                    self._log("授权 Cookie 格式错误", "error")
-                    return None
+                auth_cookie = self.session.cookies.get("oai-client-auth-session")
+                if auth_cookie:
+                    workspace_id = self._decode_workspace_id(auth_cookie)
+                    self._log(f"Workspace ID: {workspace_id}")
+                    return workspace_id
 
-                # 解码第一个 segment
-                payload = segments[0]
-                pad = "=" * ((4 - (len(payload) % 4)) % 4)
-                decoded = base64.urlsafe_b64decode((payload + pad).encode("ascii"))
-                auth_json = json_module.loads(decoded.decode("utf-8"))
-
-                workspaces = auth_json.get("workspaces") or []
-                if not workspaces:
-                    self._log("授权 Cookie 里没有 workspace 信息", "error")
-                    return None
-
-                workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
-                if not workspace_id:
-                    self._log("无法解析 workspace_id", "error")
-                    return None
-
-                self._log(f"Workspace ID: {workspace_id}")
-                return workspace_id
-
+                raise ValueError("未能获取到授权 Cookie")
             except Exception as e:
-                self._log(f"解析授权 Cookie 失败: {e}", "error")
-                return None
+                level = "warning" if attempt < max_attempts else "error"
+                self._log(
+                    f"获取 Workspace ID 失败: {e} (第 {attempt}/{max_attempts} 次)",
+                    level,
+                )
 
-        except Exception as e:
-            self._log(f"获取 Workspace ID 失败: {e}", "error")
-            return None
+            if attempt < max_attempts:
+                wait_seconds = backoff_seconds[attempt - 1]
+                self._log(f"等待 {wait_seconds} 秒后重试 Workspace ID", "warning")
+                time.sleep(wait_seconds)
+
+        return None
 
     def _select_workspace(self, workspace_id: str) -> Optional[str]:
         """选择 Workspace"""
@@ -464,3 +472,5 @@ class LoginEngine(RegistrationEngine):
             self._log(f"注册过程中发生未预期错误: {e}", "error")
             result.error_message = str(e)
             return result
+        finally:
+            self.close()

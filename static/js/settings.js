@@ -31,6 +31,7 @@ const elements = {
     proxiesTable: document.getElementById('proxies-table'),
     addProxyBtn: document.getElementById('add-proxy-btn'),
     testAllProxiesBtn: document.getElementById('test-all-proxies-btn'),
+    deleteDisabledProxiesBtn: document.getElementById('delete-disabled-proxies-btn'),
     addProxyModal: document.getElementById('add-proxy-modal'),
     proxyItemForm: document.getElementById('proxy-item-form'),
     closeProxyModal: document.getElementById('close-proxy-modal'),
@@ -204,6 +205,10 @@ function initEventListeners() {
 
     if (elements.testAllProxiesBtn) {
         elements.testAllProxiesBtn.addEventListener('click', handleTestAllProxies);
+    }
+
+    if (elements.deleteDisabledProxiesBtn) {
+        elements.deleteDisabledProxiesBtn.addEventListener('click', handleDeleteDisabledProxies);
     }
 
     if (elements.closeProxyModal) {
@@ -772,11 +777,13 @@ async function loadProxies() {
     try {
         const data = await api.get('/settings/proxies');
         renderProxies(data.proxies);
+        updateProxyBulkActions(data.proxies || []);
     } catch (error) {
         console.error('加载代理列表失败:', error);
+        updateProxyBulkActions([]);
         elements.proxiesTable.innerHTML = `
             <tr>
-                <td colspan="7">
+                <td colspan="8">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -792,7 +799,7 @@ function renderProxies(proxies) {
     if (!proxies || proxies.length === 0) {
         elements.proxiesTable.innerHTML = `
             <tr>
-                <td colspan="7">
+                <td colspan="8">
                     <div class="empty-state">
                         <div class="empty-state-icon">🌐</div>
                         <div class="empty-state-title">暂无代理</div>
@@ -834,6 +841,17 @@ function renderProxies(proxies) {
             </td>
         </tr>
     `).join('');
+}
+
+function updateProxyBulkActions(proxies) {
+    if (!elements.deleteDisabledProxiesBtn) return;
+
+    const disabledCount = (proxies || []).filter(proxy => !proxy.enabled).length;
+    elements.deleteDisabledProxiesBtn.disabled = disabledCount === 0;
+    elements.deleteDisabledProxiesBtn.dataset.count = String(disabledCount);
+    elements.deleteDisabledProxiesBtn.textContent = disabledCount > 0
+        ? `🧹 删除禁用项 (${disabledCount})`
+        : '🧹 删除禁用项';
 }
 
 function toggleSettingsMoreMenu(btn) {
@@ -931,7 +949,12 @@ async function testProxyItem(id) {
         if (result.success) {
             toast.success(result.message);
         } else {
-            toast.error(result.message);
+            if (result.auto_disabled) {
+                toast.warning(result.message);
+                await loadProxies();
+            } else {
+                toast.error(result.message);
+            }
         }
     } catch (error) {
         toast.error('测试失败: ' + error.message);
@@ -964,6 +987,22 @@ async function deleteProxyItem(id) {
     }
 }
 
+async function handleDeleteDisabledProxies() {
+    const count = Number(elements.deleteDisabledProxiesBtn?.dataset.count || 0);
+    if (!count) return;
+
+    const confirmed = await confirm(`确定要删除全部 ${count} 个已禁用代理吗？此操作不可恢复。`);
+    if (!confirmed) return;
+
+    try {
+        const result = await api.delete('/settings/proxies/disabled/batch-delete');
+        toast.success(result.message);
+        await loadProxies();
+    } catch (error) {
+        toast.error('批量删除失败: ' + error.message);
+    }
+}
+
 // 测试所有代理
 async function handleTestAllProxies() {
     elements.testAllProxiesBtn.disabled = true;
@@ -971,8 +1010,13 @@ async function handleTestAllProxies() {
 
     try {
         const result = await api.post('/settings/proxies/test-all');
-        toast.info(`测试完成: 成功 ${result.success}, 失败 ${result.failed}`);
-        loadProxies();
+        const summary = `测试完成: 成功 ${result.success}, 失败 ${result.failed}`;
+        if (result.auto_disabled > 0) {
+            toast.warning(`${summary}，已自动禁用 ${result.auto_disabled} 个`);
+        } else {
+            toast.info(summary);
+        }
+        await loadProxies();
     } catch (error) {
         toast.error('测试失败: ' + error.message);
     } finally {

@@ -211,6 +211,28 @@ class RegistrationEngine:
             self._log(f"初始化会话失败: {e}", 'error')
             return False
 
+    def close(self):
+        """关闭注册流程占用的资源"""
+        if self.session:
+            try:
+                self.session.close()
+            except Exception as e:
+                self._log(f"关闭注册会话失败: {e}", "warning")
+            finally:
+                self.session = None
+
+        try:
+            self.http_client.close()
+        except Exception as e:
+            self._log(f"关闭 HTTP 客户端失败: {e}", "warning")
+
+        close_email_service = getattr(self.email_service, "close", None)
+        if callable(close_email_service):
+            try:
+                close_email_service()
+            except Exception as e:
+                self._log(f"关闭邮箱服务失败: {e}", "warning")
+
     def _get_device_id(self) -> Optional[str]:
         """获取 Device ID"""
         if not self.oauth_start:

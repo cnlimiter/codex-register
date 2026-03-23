@@ -469,6 +469,60 @@ class ProxyUpdateRequest(BaseModel):
     priority: Optional[int] = None
 
 
+def _test_proxy_connectivity(proxy_url: str) -> dict:
+    """测试代理连通性并返回统一结果。"""
+    import time
+    from curl_cffi import requests as cffi_requests
+
+    test_url = "https://api.ipify.org?format=json"
+    start_time = time.time()
+
+    proxies_dict = {
+        "http": proxy_url,
+        "https": proxy_url
+    }
+
+    response = cffi_requests.get(
+        test_url,
+        proxies=proxies_dict,
+        timeout=3,
+        impersonate="chrome110"
+    )
+
+    elapsed_time = time.time() - start_time
+    if response.status_code == 200:
+        ip_info = response.json()
+        return {
+            "success": True,
+            "ip": ip_info.get("ip", ""),
+            "response_time": round(elapsed_time * 1000),
+            "message": f"代理连接成功，出口 IP: {ip_info.get('ip', 'unknown')}"
+        }
+
+    return {
+        "success": False,
+        "message": f"状态码: {response.status_code}"
+    }
+
+
+def _auto_disable_proxy_on_failure(db, proxy, message: str) -> dict:
+    """代理测试失败时自动禁用，并返回统一提示。"""
+    auto_disabled = False
+    if proxy.enabled:
+        crud.update_proxy(db, proxy.id, enabled=False)
+        auto_disabled = True
+
+    final_message = message
+    if auto_disabled:
+        final_message = f"{message}，已自动禁用"
+
+    return {
+        "success": False,
+        "auto_disabled": auto_disabled,
+        "message": final_message,
+    }
+
+
 @router.get("/proxies")
 async def get_proxies_list(enabled: Optional[bool] = None):
     """获取代理列表"""
@@ -559,107 +613,59 @@ async def set_proxy_default(proxy_id: int):
 @router.post("/proxies/{proxy_id}/test")
 async def test_proxy_item(proxy_id: int):
     """测试单个代理"""
-    import time
-    from curl_cffi import requests as cffi_requests
-
     with get_db() as db:
         proxy = crud.get_proxy_by_id(db, proxy_id)
         if not proxy:
             raise HTTPException(status_code=404, detail="代理不存在")
 
-        proxy_url = proxy.proxy_url
-        test_url = "https://api.ipify.org?format=json"
-        start_time = time.time()
-
         try:
-            proxies = {
-                "http": proxy_url,
-                "https": proxy_url
-            }
-
-            response = cffi_requests.get(
-                test_url,
-                proxies=proxies,
-                timeout=3,
-                impersonate="chrome110"
-            )
-
-            elapsed_time = time.time() - start_time
-
-            if response.status_code == 200:
-                ip_info = response.json()
-                return {
-                    "success": True,
-                    "ip": ip_info.get("ip", ""),
-                    "response_time": round(elapsed_time * 1000),
-                    "message": f"代理连接成功，出口 IP: {ip_info.get('ip', 'unknown')}"
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": f"代理返回错误状态码: {response.status_code}"
-                }
-
+            result = _test_proxy_connectivity(proxy.proxy_url)
+            if result["success"]:
+                return result
+            return _auto_disable_proxy_on_failure(db, proxy, f"代理返回错误状态码: {result['message'].removeprefix('状态码: ')}")
         except Exception as e:
-            return {
-                "success": False,
-                "message": f"代理连接失败: {str(e)}"
-            }
+            return _auto_disable_proxy_on_failure(db, proxy, f"代理连接失败: {str(e)}")
 
 
 @router.post("/proxies/test-all")
 async def test_all_proxies():
     """测试所有启用的代理"""
-    import time
-    from curl_cffi import requests as cffi_requests
-
     with get_db() as db:
         proxies = crud.get_enabled_proxies(db)
 
         results = []
+        auto_disabled_count = 0
         for proxy in proxies:
-            proxy_url = proxy.proxy_url
-            test_url = "https://api.ipify.org?format=json"
-            start_time = time.time()
-
             try:
-                proxies_dict = {
-                    "http": proxy_url,
-                    "https": proxy_url
-                }
-
-                response = cffi_requests.get(
-                    test_url,
-                    proxies=proxies_dict,
-                    timeout=3,
-                    impersonate="chrome110"
-                )
-
-                elapsed_time = time.time() - start_time
-
-                if response.status_code == 200:
-                    ip_info = response.json()
+                result = _test_proxy_connectivity(proxy.proxy_url)
+                if result["success"]:
                     results.append({
                         "id": proxy.id,
                         "name": proxy.name,
                         "success": True,
-                        "ip": ip_info.get("ip", ""),
-                        "response_time": round(elapsed_time * 1000)
+                        "ip": result.get("ip", ""),
+                        "response_time": result.get("response_time"),
+                        "auto_disabled": False,
                     })
                 else:
+                    failure_result = _auto_disable_proxy_on_failure(
+                        db,
+                        proxy,
+                        f"代理返回错误状态码: {result['message'].removeprefix('状态码: ')}"
+                    )
+                    auto_disabled_count += 1 if failure_result["auto_disabled"] else 0
                     results.append({
                         "id": proxy.id,
                         "name": proxy.name,
-                        "success": False,
-                        "message": f"状态码: {response.status_code}"
+                        **failure_result,
                     })
-
             except Exception as e:
+                failure_result = _auto_disable_proxy_on_failure(db, proxy, f"代理连接失败: {str(e)}")
+                auto_disabled_count += 1 if failure_result["auto_disabled"] else 0
                 results.append({
                     "id": proxy.id,
                     "name": proxy.name,
-                    "success": False,
-                    "message": str(e)
+                    **failure_result,
                 })
 
         success_count = sum(1 for r in results if r["success"])
@@ -667,6 +673,7 @@ async def test_all_proxies():
             "total": len(proxies),
             "success": success_count,
             "failed": len(proxies) - success_count,
+            "auto_disabled": auto_disabled_count,
             "results": results
         }
 
@@ -689,6 +696,14 @@ async def disable_proxy(proxy_id: int):
         if not proxy:
             raise HTTPException(status_code=404, detail="代理不存在")
         return {"success": True, "message": "代理已禁用"}
+
+
+@router.delete("/proxies/disabled/batch-delete")
+async def delete_disabled_proxies():
+    """批量删除所有已禁用代理"""
+    with get_db() as db:
+        deleted = crud.delete_disabled_proxies(db)
+        return {"success": True, "deleted": deleted, "message": f"已删除 {deleted} 个禁用代理"}
 
 
 # ============== Outlook 设置 ==============

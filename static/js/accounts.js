@@ -11,6 +11,8 @@ let selectedAccounts = new Set();
 let isLoading = false;
 let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
+const refreshingAccountIds = new Set();
+let isBatchValidating = false;
 
 // DOM 元素
 const elements = {
@@ -488,6 +490,12 @@ function updateBatchButtons() {
 
 // 刷新单个账号Token
 async function refreshToken(id) {
+    if (refreshingAccountIds.has(id)) {
+        toast.info('该账号正在刷新，请稍候...');
+        return;
+    }
+    refreshingAccountIds.add(id);
+
     try {
         toast.info('正在刷新Token...');
         const result = await api.post(`/accounts/${id}/refresh`);
@@ -500,6 +508,8 @@ async function refreshToken(id) {
         }
     } catch (error) {
         toast.error('刷新失败: ' + error.message);
+    } finally {
+        refreshingAccountIds.delete(id);
     }
 }
 
@@ -528,17 +538,24 @@ async function handleBatchRefresh() {
 // 批量验证Token
 async function handleBatchValidate() {
     if (getEffectiveCount() === 0) return;
+    if (isBatchValidating) {
+        toast.info('批量验证进行中，请稍候...');
+        return;
+    }
+
+    isBatchValidating = true;
 
     elements.batchValidateBtn.disabled = true;
     elements.batchValidateBtn.textContent = '验证中...';
 
     try {
-        const result = await api.post('/accounts/batch-validate', buildBatchPayload());
+        const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
         toast.info(`有效: ${result.valid_count}，无效: ${result.invalid_count}`);
         loadAccounts();
     } catch (error) {
         toast.error('批量验证失败: ' + error.message);
     } finally {
+        isBatchValidating = false;
         updateBatchButtons();
     }
 }

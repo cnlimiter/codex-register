@@ -472,6 +472,13 @@ def delete_proxy(db: Session, proxy_id: int) -> bool:
     return True
 
 
+def delete_disabled_proxies(db: Session) -> int:
+    """删除所有已禁用代理"""
+    deleted = db.query(Proxy).filter(Proxy.enabled == False).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
 def update_proxy_last_used(db: Session, proxy_id: int) -> bool:
     """更新代理最后使用时间"""
     db_proxy = get_proxy_by_id(db, proxy_id)
@@ -714,8 +721,7 @@ def delete_tm_service(db: Session, service_id: int) -> bool:
     db.delete(svc)
     db.commit()
     return True
-
-
+  
 def update_outlook_refresh_token(db: Session, service_id: int, email: str, new_refresh_token: str):
     """更新 EmailService.config 中指定邮箱的 refresh_token"""
     service = db.query(EmailService).filter(EmailService.id == service_id).first()
