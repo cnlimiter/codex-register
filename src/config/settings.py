@@ -136,7 +136,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
     ),
     "openai_redirect_uri": SettingDefinition(
         db_key="openai.redirect_uri",
-        default_value="http://localhost:1455/auth/callback",
+        default_value="http://localhost:15555/auth/callback",
         category=SettingCategory.OPENAI,
         description="OpenAI OAuth 回调 URI"
     ),
@@ -622,7 +622,7 @@ class Settings(BaseModel):
     openai_client_id: str = "app_EMoamEEZ73f0CkXaXp7hrann"
     openai_auth_url: str = "https://auth.openai.com/oauth/authorize"
     openai_token_url: str = "https://auth.openai.com/oauth/token"
-    openai_redirect_uri: str = "http://localhost:1455/auth/callback"
+    openai_redirect_uri: str = "http://localhost:15555/auth/callback"
     openai_scope: str = "openid email profile offline_access"
 
     # 代理配置

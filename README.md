@@ -146,9 +146,9 @@ docker-compose up -d
 
 ```bash
 docker run -d \
-  -p 1455:1455 \
+  -p 15555:15555 \
   -e WEBUI_HOST=0.0.0.0 \
-  -e WEBUI_PORT=1455 \
+  -e WEBUI_PORT=15555 \
   -e WEBUI_ACCESS_PASSWORD=your_secure_password \
   -v $(pwd)/data:/app/data \
   --name codex-register \
@@ -157,7 +157,7 @@ docker run -d \
 
 环境变量说明：
 - `WEBUI_HOST`: 监听的主机地址 (默认 `0.0.0.0`)
-- `WEBUI_PORT`: 监听的端口 (默认 `1455`)
+- `WEBUI_PORT`: 监听的端口 (默认 `15555`)
 - `WEBUI_ACCESS_PASSWORD`: 设置 Web UI 的访问密码
 - `DEBUG`: 设为 `1` 或 `true` 开启调试模式
 - `LOG_LEVEL`: 日志级别，如 `info`, `debug`

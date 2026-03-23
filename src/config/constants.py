@@ -56,7 +56,7 @@ APP_DESCRIPTION = "自动注册 OpenAI/Codex CLI 账号的系统"
 OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OAUTH_AUTH_URL = "https://auth.openai.com/oauth/authorize"
 OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
-OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
+OAUTH_REDIRECT_URI = "http://localhost:15555/auth/callback"
 OAUTH_SCOPE = "openid email profile offline_access"
 
 # OpenAI API 端点
