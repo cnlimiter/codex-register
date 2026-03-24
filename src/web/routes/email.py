@@ -147,6 +147,7 @@ async def get_email_services_stats():
             'duck_mail_count': 0,
             'freemail_count': 0,
             'imap_mail_count': 0,
+            'yyds_mail_count': 0,
             'tempmail_available': True,  # 临时邮箱始终可用
             'enabled_count': enabled_count
         }
@@ -164,6 +165,8 @@ async def get_email_services_stats():
                 stats['freemail_count'] = count
             elif service_type == 'imap_mail':
                 stats['imap_mail_count'] = count
+            elif service_type == 'yyds_mail':
+                stats['yyds_mail_count'] = count
 
         return stats
 
@@ -245,6 +248,16 @@ async def get_service_types():
                     {"name": "use_ssl", "label": "使用 SSL", "required": False, "default": True},
                     {"name": "email", "label": "邮箱地址", "required": True},
                     {"name": "password", "label": "密码/授权码", "required": True, "secret": True},
+                ]
+            },
+            {
+                "value": "yyds_mail",
+                "label": "YYDS Mail",
+                "description": "YYDS Mail (215.im) 临时邮箱服务，需要 API Key，强制直连",
+                "config_fields": [
+                    {"name": "base_url", "label": "API 地址", "required": False, "default": "https://maliapi.215.im/v1", "placeholder": "https://maliapi.215.im/v1"},
+                    {"name": "api_key", "label": "API Key", "required": True, "secret": True, "placeholder": "AC-your_api_key_here"},
+                    {"name": "default_domain", "label": "指定域名", "required": False, "placeholder": "留空自动选择"},
                 ]
             }
         ]

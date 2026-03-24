@@ -38,6 +38,7 @@ class EmailServiceType(str, Enum):
     DUCK_MAIL = "duck_mail"
     FREEMAIL = "freemail"
     IMAP_MAIL = "imap_mail"
+    YYDS_MAIL = "yyds_mail"
 
 
 # ============================================================================
@@ -140,6 +141,13 @@ EMAIL_SERVICE_DEFAULTS = {
         "use_ssl": True,
         "email": "",
         "password": "",
+        "timeout": 30,
+        "max_retries": 3,
+    },
+    "yyds_mail": {
+        "base_url": "https://maliapi.215.im/v1",
+        "api_key": "",
+        "default_domain": "",
         "timeout": 30,
         "max_retries": 3,
     }
