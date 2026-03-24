@@ -398,7 +398,8 @@ class RegistrationEngine:
             self._log(f"提交密码状态: {response.status_code}")
 
             if response.status_code != 200:
-                self._log(f"密码注册失败: {response.json().get("error", {}).get("message", '')}", "warning")
+                self._log(f"密码注册失败: {response.json().get('error', {}).get('message', '')}", "warning")
+
 
                 # 解析错误信息，判断是否是邮箱已注册
                 try:
