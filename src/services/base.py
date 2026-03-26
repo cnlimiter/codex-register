@@ -180,6 +180,28 @@ class BaseEmailService(abc.ABC):
             self._seen_verification_messages[key] = set()
         return self._seen_verification_messages[key]
 
+    def load_verification_state(
+        self,
+        email: str,
+        used_codes: Optional[List[str]] = None,
+        seen_messages: Optional[List[str]] = None,
+    ) -> None:
+        """将持久化的验证码状态恢复到当前服务实例。"""
+        if used_codes:
+            self._get_used_verification_codes(email).update(
+                str(code) for code in used_codes if code
+            )
+        if seen_messages:
+            self._get_seen_verification_messages(email).update(
+                str(marker) for marker in seen_messages if marker
+            )
+
+    def export_verification_state(self, email: str) -> Dict[str, List[str]]:
+        """导出当前邮箱的验证码状态，用于跨请求复用。"""
+        return {
+            "used_codes": sorted(self._get_used_verification_codes(email)),
+            "seen_messages": sorted(self._get_seen_verification_messages(email)),
+        }
     def _remember_verification_code(self, email: str, code: str) -> bool:
         """记录验证码；若已用过则返回 False。"""
         used_codes = self._get_used_verification_codes(email)
@@ -228,14 +250,14 @@ class BaseEmailService(abc.ABC):
             return value.timestamp()
 
         if isinstance(value, (int, float)):
-            return float(value)
+            return self._normalize_unix_timestamp(float(value))
 
         text = str(value).strip()
         if not text:
             return None
 
         try:
-            return float(text)
+            return self._normalize_unix_timestamp(float(text))
         except ValueError:
             pass
 
@@ -245,6 +267,14 @@ class BaseEmailService(abc.ABC):
         except ValueError:
             return None
 
+    def _normalize_unix_timestamp(self, value: float) -> float:
+        """将秒/毫秒/微秒级 Unix 时间统一归一到秒。"""
+        absolute = abs(value)
+        if absolute >= 1e14:
+            return value / 1_000_000
+        if absolute >= 1e11:
+            return value / 1_000
+        return value
     def _is_message_before_otp(self, message_time: Any, otp_sent_at: Optional[float], tolerance_seconds: int = 1) -> bool:
         """
         判断邮件是否早于当前 OTP 发送窗口。
@@ -260,6 +290,13 @@ class BaseEmailService(abc.ABC):
 
         return message_ts + tolerance_seconds < otp_sent_at
 
+    def _sort_items_by_message_time(self, items: List[Any], value_getter) -> List[Any]:
+        """按邮件时间倒序排列，优先处理最新邮件。"""
+        return sorted(
+            items,
+            key=lambda item: self._parse_message_timestamp(value_getter(item)) or float("-inf"),
+            reverse=True,
+        )
     def wait_for_email(
         self,
         email: str,

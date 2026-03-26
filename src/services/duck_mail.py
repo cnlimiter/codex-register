@@ -259,7 +259,12 @@ class DuckMailService(BaseEmailService):
                 )
                 messages = response.get("hydra:member", [])
 
-                for message in messages:
+                ordered_messages = self._sort_items_by_message_time(
+                    messages,
+                    lambda item: item.get("createdAt") if isinstance(item, dict) else None,
+                )
+
+                for message in ordered_messages:
                     message_id = str(message.get("id") or "").strip()
                     if not message_id or message_id in seen_message_ids:
                         continue

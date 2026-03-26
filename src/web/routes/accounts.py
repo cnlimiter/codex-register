@@ -1044,6 +1044,29 @@ def _build_inbox_config(db, service_type, email: str) -> dict:
     return cfg
 
 
+def _load_account_verification_state(account: Account) -> dict:
+    """从账号扩展信息中读取验证码去重状态。"""
+    extra = account.extra_data or {}
+    state = extra.get("verification_state") if isinstance(extra, dict) else {}
+    if not isinstance(state, dict):
+        state = {}
+    return {
+        "used_codes": [str(code) for code in (state.get("used_codes") or []) if code],
+        "seen_messages": [str(marker) for marker in (state.get("seen_messages") or []) if marker],
+    }
+
+
+def _save_account_verification_state(db, account: Account, service) -> None:
+    """将当前收件箱消费状态持久化到账号表，支持跨请求延续。"""
+    state = service.export_verification_state(account.email)
+    if not state["used_codes"] and not state["seen_messages"]:
+        return
+
+    extra = dict(account.extra_data or {})
+    extra["verification_state"] = state
+    crud.update_account(db, account.id, extra_data=extra)
+
+
 @router.post("/{account_id}/inbox-code")
 async def get_account_inbox_code(account_id: int):
     """查询账号邮箱收件箱最新验证码"""
@@ -1065,6 +1088,10 @@ async def get_account_inbox_code(account_id: int):
 
         try:
             svc = EmailServiceFactory.create(service_type, config)
+            svc.load_verification_state(
+                account.email,
+                **_load_account_verification_state(account),
+            )
             code = svc.get_verification_code(
                 account.email,
                 email_id=account.email_service_id,
@@ -1075,5 +1102,7 @@ async def get_account_inbox_code(account_id: int):
 
         if not code:
             return {"success": False, "error": "未收到验证码邮件"}
+
+        _save_account_verification_state(db, account, svc)
 
         return {"success": True, "code": code, "email": account.email}

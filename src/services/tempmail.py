@@ -205,7 +205,12 @@ class TempmailService(BaseEmailService):
                     time.sleep(3)
                     continue
 
-                for msg in email_list:
+                ordered_emails = self._sort_items_by_message_time(
+                    email_list,
+                    lambda item: item.get("date") if isinstance(item, dict) else None,
+                )
+
+                for msg in ordered_emails:
                     if not isinstance(msg, dict):
                         continue
 

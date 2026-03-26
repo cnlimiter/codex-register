@@ -210,7 +210,17 @@ class FreemailService(BaseEmailService):
                     time.sleep(3)
                     continue
 
-                for mail in mails:
+                ordered_mails = self._sort_items_by_message_time(
+                    mails,
+                    lambda item: (
+                        item.get("created_at")
+                        or item.get("createdAt")
+                        or item.get("received_at")
+                        or item.get("receivedAt")
+                    ) if isinstance(item, dict) else None,
+                )
+
+                for mail in ordered_mails:
                     mail_id = mail.get("id")
                     if not mail_id or mail_id in seen_mail_ids:
                         continue

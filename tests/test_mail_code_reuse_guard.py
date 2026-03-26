@@ -1,5 +1,6 @@
 from src.services.duck_mail import DuckMailService
 from src.services.freemail import FreemailService
+from src.services.moe_mail import MeoMailEmailService
 from src.services.temp_mail import TempMailService
 from src.services.tempmail import TempmailService
 
@@ -324,15 +325,15 @@ def test_duck_mail_service_skips_previously_used_code_even_with_small_timestamp_
         ),
         FakeResponse(
             payload={
-                "id": "msg-1",
-                "text": "Your OpenAI verification code is 111111",
+                "id": "msg-2",
+                "text": "Your OpenAI verification code is 654321",
                 "html": [],
             }
         ),
         FakeResponse(
             payload={
-                "id": "msg-2",
-                "text": "Your OpenAI verification code is 654321",
+                "id": "msg-1",
+                "text": "Your OpenAI verification code is 111111",
                 "html": [],
             }
         ),
@@ -359,3 +360,53 @@ def test_duck_mail_service_skips_previously_used_code_even_with_small_timestamp_
 
     assert first_code == "111111"
     assert second_code == "654321"
+
+
+def test_moe_mail_service_filters_old_messages_with_millisecond_timestamps():
+    service = MeoMailEmailService({
+        "base_url": "https://mail.example.com",
+        "api_key": "api-key",
+    })
+
+    def fake_make_request(method, endpoint, **kwargs):
+        if endpoint == "/api/emails/email-1":
+            return {
+                "messages": [
+                    {
+                        "id": "msg-old",
+                        "from_address": "noreply@openai.com",
+                        "subject": "Your verification code",
+                        "received_at": 1742378400000,
+                    },
+                    {
+                        "id": "msg-new",
+                        "from_address": "noreply@openai.com",
+                        "subject": "Your verification code",
+                        "received_at": 1742378403000,
+                    },
+                ]
+            }
+        if endpoint == "/api/emails/email-1/msg-old":
+            return {
+                "message": {
+                    "content": "Your OpenAI verification code is 111111",
+                }
+            }
+        if endpoint == "/api/emails/email-1/msg-new":
+            return {
+                "message": {
+                    "content": "Your OpenAI verification code is 654321",
+                }
+            }
+        raise AssertionError(f"未准备响应: {method} {endpoint}")
+
+    service._make_request = fake_make_request
+
+    code = service.get_verification_code(
+        email="tester@example.com",
+        email_id="email-1",
+        timeout=1,
+        otp_sent_at=1742378402,
+    )
+
+    assert code == "654321"

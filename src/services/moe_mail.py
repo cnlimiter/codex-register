@@ -304,7 +304,17 @@ class MeoMailEmailService(BaseEmailService):
                     time.sleep(3)
                     continue
 
-                for message in messages:
+                ordered_messages = self._sort_items_by_message_time(
+                    messages,
+                    lambda item: (
+                        item.get("created_at")
+                        or item.get("createdAt")
+                        or item.get("received_at")
+                        or item.get("receivedAt")
+                    ) if isinstance(item, dict) else None,
+                )
+
+                for message in ordered_messages:
                     message_id = message.get("id")
                     if not message_id or message_id in seen_message_ids:
                         continue
