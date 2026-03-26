@@ -208,6 +208,7 @@
                             <option value="tempmail">TempMail（自部署 Cloudflare Worker）</option>
                             <option value="duckmail">DuckMail（DuckMail API）</option>
                             <option value="freemail">Freemail（自部署 Cloudflare Worker）</option>
+                            <option value="cloudmail">Cloud Mail（公开 API）</option>
                             <option value="imap">标准 IMAP（Gmail/QQ/163等）</option>
                         </select>
                     </div>
@@ -273,6 +274,25 @@
                         <div class="form-group">
                             <label for="custom-fm-domain">邮箱域名 (可选)</label>
                             <input type="text" id="custom-fm-domain" name="fm_domain" placeholder="example.com">
+                        </div>
+                    </div>
+                    <!-- Cloud Mail 字段 -->
+                    <div id="add-cloudmail-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="custom-cm-base-url">站点地址</label>
+                            <input type="text" id="custom-cm-base-url" name="cm_base_url" placeholder="https://mail.example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-cm-admin-email">管理员邮箱</label>
+                            <input type="email" id="custom-cm-admin-email" name="cm_admin_email" placeholder="admin@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-cm-admin-password">管理员密码</label>
+                            <input type="password" id="custom-cm-admin-password" name="cm_admin_password" placeholder="用于获取 public token">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-cm-domain">默认域名</label>
+                            <input type="text" id="custom-cm-domain" name="cm_domain" placeholder="mail.example.com">
                         </div>
                     </div>
                     <!-- IMAP 字段 -->
@@ -411,6 +431,26 @@
                         <div class="form-group">
                             <label for="edit-fm-domain">邮箱域名 (可选)</label>
                             <input type="text" id="edit-fm-domain" name="fm_domain" placeholder="example.com">
+                        </div>
+                    </div>
+                    <!-- Cloud Mail 字段 -->
+                    <div id="edit-cloudmail-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="edit-cm-base-url">站点地址</label>
+                            <input type="text" id="edit-cm-base-url" name="cm_base_url" placeholder="https://mail.example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-cm-admin-email">管理员邮箱</label>
+                            <input type="email" id="edit-cm-admin-email" name="cm_admin_email" placeholder="admin@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-cm-admin-password">管理员密码</label>
+                            <input type="password" id="edit-cm-admin-password" name="cm_admin_password" placeholder="留空则不修改">
+                            <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-cm-domain">默认域名</label>
+                            <input type="text" id="edit-cm-domain" name="cm_domain" placeholder="mail.example.com">
                         </div>
                     </div>
                     <!-- IMAP 字段 -->

@@ -1017,6 +1017,7 @@ def _build_inbox_config(db, service_type, email: str) -> dict:
         EST.DUCK_MAIL: "duck_mail",
         EST.FREEMAIL: "freemail",
         EST.IMAP_MAIL: "imap_mail",
+        EST.CLOUD_MAIL: "cloud_mail",
         EST.OUTLOOK: "outlook",
     }
     db_type = type_map.get(service_type)

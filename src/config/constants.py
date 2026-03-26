@@ -39,6 +39,7 @@ class EmailServiceType(str, Enum):
     FREEMAIL = "freemail"
     IMAP_MAIL = "imap_mail"
     YYDS_MAIL = "yyds_mail"
+    CLOUD_MAIL = "cloud_mail"
 
 
 # ============================================================================
@@ -150,7 +151,15 @@ EMAIL_SERVICE_DEFAULTS = {
         "default_domain": "",
         "timeout": 30,
         "max_retries": 3,
-    }
+    },
+    "cloud_mail": {
+        "base_url": "",
+        "admin_email": "",
+        "admin_password": "",
+        "default_domain": "",
+        "timeout": 30,
+        "max_retries": 3,
+    },
 }
 
 # ============================================================================

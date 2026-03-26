@@ -24,7 +24,8 @@ let availableServices = {
     moe_mail: { available: false, services: [] },
     temp_mail: { available: false, services: [] },
     duck_mail: { available: false, services: [] },
-    freemail: { available: false, services: [] }
+    freemail: { available: false, services: [] },
+    cloud_mail: { available: false, services: [] }
 };
 
 // WebSocket 相关变量
@@ -372,6 +373,23 @@ function updateEmailServiceOptions() {
 
         select.appendChild(optgroup);
     }
+
+    // Cloud Mail
+    if (availableServices.cloud_mail && availableServices.cloud_mail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `☁️ Cloud Mail (${availableServices.cloud_mail.count} 个服务)`;
+
+        availableServices.cloud_mail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `cloud_mail:${service.id}`;
+            option.textContent = service.name + (service.default_domain ? ` (@${service.default_domain})` : '');
+            option.dataset.type = 'cloud_mail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
 }
 
 // 处理邮箱服务切换
@@ -421,6 +439,11 @@ function handleServiceChange(e) {
         const service = availableServices.freemail.services.find(s => s.id == id);
         if (service) {
             addLog('info', `[系统] 已选择 Freemail 服务: ${service.name}`);
+        }
+    } else if (type === 'cloud_mail') {
+        const service = availableServices.cloud_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Cloud Mail 服务: ${service.name}`);
         }
     }
 }

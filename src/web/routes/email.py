@@ -84,7 +84,7 @@ class OutlookBatchImportResponse(BaseModel):
 # ============== Helper Functions ==============
 
 # 敏感字段列表，返回响应时需要过滤
-SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token'}
+SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token', 'admin_password'}
 
 def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤敏感配置信息"""
@@ -148,6 +148,7 @@ async def get_email_services_stats():
             'freemail_count': 0,
             'imap_mail_count': 0,
             'yyds_mail_count': 0,
+            'cloud_mail_count': 0,
             'tempmail_available': True,  # 临时邮箱始终可用
             'enabled_count': enabled_count
         }
@@ -167,6 +168,8 @@ async def get_email_services_stats():
                 stats['imap_mail_count'] = count
             elif service_type == 'yyds_mail':
                 stats['yyds_mail_count'] = count
+            elif service_type == 'cloud_mail':
+                stats['cloud_mail_count'] = count
 
         return stats
 
@@ -236,6 +239,17 @@ async def get_service_types():
                     {"name": "base_url", "label": "API 地址", "required": True, "placeholder": "https://freemail.example.com"},
                     {"name": "admin_token", "label": "Admin Token", "required": True, "secret": True},
                     {"name": "domain", "label": "邮箱域名", "required": False, "placeholder": "example.com"},
+                ]
+            },
+            {
+                "value": "cloud_mail",
+                "label": "Cloud Mail",
+                "description": "cloud-mail 自部署邮箱服务，使用公开 API",
+                "config_fields": [
+                    {"name": "base_url", "label": "站点地址", "required": True, "placeholder": "https://mail.example.com"},
+                    {"name": "admin_email", "label": "管理员邮箱", "required": True, "placeholder": "admin@example.com"},
+                    {"name": "admin_password", "label": "管理员密码", "required": True, "secret": True},
+                    {"name": "default_domain", "label": "默认域名", "required": True, "placeholder": "mail.example.com"},
                 ]
             },
             {

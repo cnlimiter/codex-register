@@ -372,7 +372,8 @@ const statusMap = {
         temp_mail: 'Temp-Mail（自部署）',
         duck_mail: 'DuckMail',
         freemail: 'Freemail',
-        imap_mail: 'IMAP 邮箱'
+        imap_mail: 'IMAP 邮箱',
+        cloud_mail: 'Cloud Mail'
     }
 };
 
