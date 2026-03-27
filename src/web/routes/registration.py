@@ -560,106 +560,144 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             while True:
                 actual_proxy_url = requested_proxy
                 proxy_id = None
-                if not actual_proxy_url:
-                    actual_proxy_url, proxy_id = get_proxy_for_registration(
+                gateway_switched = False
+                try:
+                    if not actual_proxy_url:
+                        actual_proxy_url, proxy_id = get_proxy_for_registration(
+                            db,
+                            exclude_proxy_ids=list(exhausted_proxy_ids),
+                        )
+                        if actual_proxy_url:
+                            logger.info(f"任务 {task_uuid} 使用代理: {actual_proxy_url[:50]}...")
+
+                    crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
+                    service_candidates = _build_email_service_candidates(
                         db,
-                        exclude_proxy_ids=list(exhausted_proxy_ids),
+                        requested_service_type,
+                        actual_proxy_url,
+                        email_service_id,
+                        email_service_config,
                     )
+
+                    should_retry_with_new_proxy = False
+
+                    # 使用任意代理时，临时将默认网关切到代理出口网关；结束后恢复。
                     if actual_proxy_url:
-                        logger.info(f"任务 {task_uuid} 使用代理: {actual_proxy_url[:50]}...")
+                        try:
+                            import subprocess
+                            out = subprocess.run(
+                                ["bash", "/app/scripts/switch_gateway.sh", "proxy"],
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                            )
+                            msg = (out.stdout or out.stderr).strip()
+                            if out.returncode == 0:
+                                log_callback(f"[网关] 切换到代理网关: {msg}")
+                                gateway_switched = True
+                            else:
+                                log_callback(f"[网关] 切换代理网关失败(returncode={out.returncode}): {msg}")
+                        except Exception as e:
+                            log_callback(f"[网关] 切换代理网关失败: {e}")
 
-                crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
-                service_candidates = _build_email_service_candidates(
-                    db,
-                    requested_service_type,
-                    actual_proxy_url,
-                    email_service_id,
-                    email_service_config,
-                )
+                    for attempt_index, candidate in enumerate(service_candidates, start=1):
+                        selected_service_type = candidate["service_type"]
+                        candidate_config = candidate["config"]
+                        db_service = candidate.get("db_service")
+                        active_service_type = selected_service_type
 
-                should_retry_with_new_proxy = False
-
-                for attempt_index, candidate in enumerate(service_candidates, start=1):
-                    selected_service_type = candidate["service_type"]
-                    candidate_config = candidate["config"]
-                    db_service = candidate.get("db_service")
-                    active_service_type = selected_service_type
-
-                    if db_service is not None:
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                        logger.info(
-                            f"任务 {task_uuid} 使用数据库邮箱服务: {db_service.name} "
-                            f"(ID: {db_service.id}, 类型: {selected_service_type.value}, 尝试: {attempt_index}/{len(service_candidates)})"
-                        )
-                        log_callback(
-                            f"[系统] 使用邮箱服务: {db_service.name} "
-                            f"({selected_service_type.value}, 尝试 {attempt_index}/{len(service_candidates)})"
-                        )
-                    else:
-                        crud.update_registration_task(db, task_uuid, email_service_id=None)
-
-                    task_manager.update_status(task_uuid, "running", email_service=active_service_type.value)
-                    status_callback = _create_task_status_callback(task_uuid, active_service_type.value)
-                    email_service = EmailServiceFactory.create(
-                        selected_service_type,
-                        candidate_config,
-                        name=db_service.name if db_service is not None else None,
-                    )
-                    (
-                        engine,
-                        result,
-                        email_prepare_phase,
-                        _,
-                        timeout_backoff,
-                    ) = _run_registration_engine_attempt(
-                        task_uuid=task_uuid,
-                        email_service=email_service,
-                        actual_proxy_url=actual_proxy_url,
-                        log_callback=log_callback,
-                        db_service=db_service,
-                        status_callback=status_callback,
-                    )
-
-                    if result.success:
-                        break
-
-                    if is_retryable_proxy_error(result.error_message):
-                        should_retry_with_new_proxy = True
-                        break
-
-                    can_failover = (
-                        db_service is not None
-                        and attempt_index < len(service_candidates)
-                        and email_prepare_phase is not None
-                        and not email_prepare_phase.success
-                        and email_prepare_phase.error_code == "EMAIL_PROVIDER_RATE_LIMITED"
-                        and email_prepare_phase.provider_backoff is not None
-                    )
-                    if not can_failover:
-                        if timeout_backoff is not None:
-                            logger.warning(
-                                f"邮箱服务 OTP 超时，已退避 {db_service.name} "
-                                f"{timeout_backoff.delay_seconds} 秒，连续失败 "
-                                f"{timeout_backoff.failures} 次"
+                        if db_service is not None:
+                            crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                            logger.info(
+                                f"任务 {task_uuid} 使用数据库邮箱服务: {db_service.name} "
+                                f"(ID: {db_service.id}, 类型: {selected_service_type.value}, 尝试: {attempt_index}/{len(service_candidates)})"
                             )
                             log_callback(
-                                f"[系统] 邮箱服务 OTP 超时，退避 "
-                                f"{timeout_backoff.delay_seconds} 秒: {db_service.name} "
-                                f"(连续失败 {timeout_backoff.failures} 次)"
+                                f"[系统] 使用邮箱服务: {db_service.name} "
+                                f"({selected_service_type.value}, 尝试 {attempt_index}/{len(service_candidates)})"
                             )
-                        break
+                        else:
+                            crud.update_registration_task(db, task_uuid, email_service_id=None)
 
-                    backoff_state = email_prepare_phase.provider_backoff
-                    cooldown = _trip_email_service_circuit(db_service.id, backoff_state)
-                    logger.warning(
-                        f"邮箱服务限流，已退避 {db_service.name} {cooldown} 秒，"
-                        f"连续失败 {backoff_state.failures} 次，"
-                        f"任务 {task_uuid} 将切换到下一个服务"
-                    )
-                    log_callback(
-                        f"[系统] 邮箱服务限流，退避 {cooldown} 秒并切换: "
-                        f"{db_service.name} (连续失败 {backoff_state.failures} 次)"
-                    )
+                        task_manager.update_status(task_uuid, "running", email_service=active_service_type.value)
+                        status_callback = _create_task_status_callback(task_uuid, active_service_type.value)
+                        email_service = EmailServiceFactory.create(
+                            selected_service_type,
+                            candidate_config,
+                            name=db_service.name if db_service is not None else None,
+                        )
+                        (
+                            engine,
+                            result,
+                            email_prepare_phase,
+                            _,
+                            timeout_backoff,
+                        ) = _run_registration_engine_attempt(
+                            task_uuid=task_uuid,
+                            email_service=email_service,
+                            actual_proxy_url=actual_proxy_url,
+                            log_callback=log_callback,
+                            db_service=db_service,
+                            status_callback=status_callback,
+                        )
+
+                        if result.success:
+                            break
+
+                        if is_retryable_proxy_error(result.error_message):
+                            should_retry_with_new_proxy = True
+                            break
+
+                        can_failover = (
+                            db_service is not None
+                            and attempt_index < len(service_candidates)
+                            and email_prepare_phase is not None
+                            and not email_prepare_phase.success
+                            and email_prepare_phase.error_code == "EMAIL_PROVIDER_RATE_LIMITED"
+                            and email_prepare_phase.provider_backoff is not None
+                        )
+                        if not can_failover:
+                            if timeout_backoff is not None:
+                                logger.warning(
+                                    f"邮箱服务 OTP 超时，已退避 {db_service.name} "
+                                    f"{timeout_backoff.delay_seconds} 秒，连续失败 "
+                                    f"{timeout_backoff.failures} 次"
+                                )
+                                log_callback(
+                                    f"[系统] 邮箱服务 OTP 超时，退避 "
+                                    f"{timeout_backoff.delay_seconds} 秒: {db_service.name} "
+                                    f"(连续失败 {timeout_backoff.failures} 次)"
+                                )
+                            break
+
+                        backoff_state = email_prepare_phase.provider_backoff
+                        cooldown = _trip_email_service_circuit(db_service.id, backoff_state)
+                        logger.warning(
+                            f"邮箱服务限流，已退避 {db_service.name} {cooldown} 秒，"
+                            f"连续失败 {backoff_state.failures} 次，"
+                            f"任务 {task_uuid} 将切换到下一个服务"
+                        )
+                        log_callback(
+                            f"[系统] 邮箱服务限流，退避 {cooldown} 秒并切换: "
+                            f"{db_service.name} (连续失败 {backoff_state.failures} 次)"
+                        )
+                finally:
+                    if gateway_switched:
+                        try:
+                            import subprocess
+                            out = subprocess.run(
+                                ["bash", "/app/scripts/switch_gateway.sh", "default"],
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                            )
+                            msg = (out.stdout or out.stderr).strip()
+                            if out.returncode == 0:
+                                log_callback(f"[网关] 恢复默认网关: {msg}")
+                            else:
+                                log_callback(f"[网关] 恢复默认网关失败(returncode={out.returncode}): {msg}")
+                        except Exception as e:
+                            log_callback(f"[网关] 恢复默认网关失败: {e}")
 
                 if result.success:
                     break

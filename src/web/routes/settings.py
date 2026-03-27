@@ -445,6 +445,141 @@ async def update_email_code_settings(request: EmailCodeSettings):
 
 # ============== 代理列表 CRUD ==============
 
+class ProxyImportRequest(BaseModel):
+    """批量导入代理请求"""
+    text: str
+    replace: bool = False
+
+
+def _parse_proxy_lines(text: str):
+    import re
+    from urllib.parse import urlsplit, unquote
+
+    results = []
+    errors = []
+    seen = set()
+
+    def _normalize_raw(line: str) -> str:
+        line = line.strip().strip('"').strip("'")
+        # 去掉尾部注释（仅处理空白后跟 # 的情况）
+        line = re.sub(r'\s+#.*$', '', line).strip()
+        return line
+
+    for idx, raw in enumerate((text or '').splitlines(), start=1):
+        line = _normalize_raw(raw)
+        if not line or line.startswith('#'):
+            continue
+
+        original = line
+        if '://' not in line:
+            # 支持 host:port / user:pass@host:port
+            if re.match(r'^.+@[^:]+:\d+$', line) or re.match(r'^[^:]+:\d+$', line):
+                line = 'http://' + line
+            else:
+                errors.append({"line": idx, "value": original, "error": "不支持的代理格式"})
+                continue
+
+        try:
+            parsed = urlsplit(line)
+        except Exception:
+            errors.append({"line": idx, "value": original, "error": "URL 解析失败"})
+            continue
+
+        scheme = (parsed.scheme or '').lower()
+        if scheme not in ('http', 'https', 'socks5', 'socks5h', 'socks4'):
+            errors.append({"line": idx, "value": original, "error": f"不支持的代理协议: {scheme or 'unknown'}"})
+            continue
+
+        host = parsed.hostname
+        port = parsed.port
+        if not host or not port:
+            errors.append({"line": idx, "value": original, "error": "缺少 host 或 port"})
+            continue
+
+        username = unquote(parsed.username) if parsed.username else None
+        password = unquote(parsed.password) if parsed.password else None
+
+        # 系统当前仅区分 http / socks5，两者之外映射到兼容类型
+        ptype = 'socks5' if scheme in ('socks5', 'socks5h', 'socks4') else 'http'
+
+        key = (ptype, host, int(port), username or '', password or '')
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            'name': f'{ptype.upper()} {host}:{port}',
+            'type': ptype,
+            'host': host,
+            'port': int(port),
+            'username': username,
+            'password': password,
+            'enabled': True,
+            'priority': 0,
+            'raw_url': line,
+        })
+
+    return results, errors
+
+
+@router.post('/proxies/import')
+async def import_proxies(request: ProxyImportRequest):
+    """批量导入代理列表（支持 proxies.txt 文本粘贴）"""
+    from pathlib import Path
+
+    text = (request.text or '').strip()
+    if not text:
+        txt_path = Path('/app/proxies.txt')
+        if txt_path.exists():
+            text = txt_path.read_text(encoding='utf-8', errors='ignore').strip()
+
+    with get_db() as db:
+        proxies, errors = _parse_proxy_lines(text)
+
+        if not text:
+            raise HTTPException(status_code=400, detail='请先粘贴代理列表')
+
+        if request.replace:
+            existing = crud.get_proxies(db)
+            for item in existing:
+                crud.delete_proxy(db, item.id)
+
+        existing_keys = {
+            (p.type, p.host, p.port, p.username or '', p.password or '')
+            for p in crud.get_proxies(db)
+        }
+
+        inserted = 0
+        skipped = 0
+        for item in proxies:
+            key = (item['type'], item['host'], item['port'], item['username'] or '', item['password'] or '')
+            if key in existing_keys:
+                skipped += 1
+                continue
+
+            crud.create_proxy(
+                db,
+                name=item['name'],
+                type=item['type'],
+                host=item['host'],
+                port=item['port'],
+                username=item['username'],
+                password=item['password'],
+                enabled=item['enabled'],
+                priority=item['priority'],
+            )
+            existing_keys.add(key)
+            inserted += 1
+
+        return {
+            'success': True,
+            'inserted': inserted,
+            'skipped': skipped,
+            'errors': errors,
+            'parsed': len(proxies),
+            'loaded_from_file': bool(not request.text.strip() and text),
+        }
+
+
 class ProxyCreateRequest(BaseModel):
     """创建代理请求"""
     name: str
@@ -569,7 +704,6 @@ async def test_proxy_item(proxy_id: int):
 
         proxy_url = proxy.proxy_url
         test_url = "https://api.ipify.org?format=json"
-        start_time = time.time()
 
         try:
             proxies = {
@@ -577,28 +711,46 @@ async def test_proxy_item(proxy_id: int):
                 "https": proxy_url
             }
 
-            response = cffi_requests.get(
-                test_url,
-                proxies=proxies,
-                timeout=3,
-                impersonate="chrome110"
-            )
+            last_error = None
+            for attempt in range(2):
+                start_time = time.time()
+                try:
+                    response = cffi_requests.get(
+                        test_url,
+                        proxies=proxies,
+                        timeout=5,
+                        impersonate="chrome110"
+                    )
 
-            elapsed_time = time.time() - start_time
+                    elapsed_time = time.time() - start_time
 
-            if response.status_code == 200:
-                ip_info = response.json()
-                return {
-                    "success": True,
-                    "ip": ip_info.get("ip", ""),
-                    "response_time": round(elapsed_time * 1000),
-                    "message": f"代理连接成功，出口 IP: {ip_info.get('ip', 'unknown')}"
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": f"代理返回错误状态码: {response.status_code}"
-                }
+                    if response.status_code == 200:
+                        ip_info = response.json()
+                        return {
+                            "success": True,
+                            "ip": ip_info.get("ip", ""),
+                            "response_time": round(elapsed_time * 1000),
+                            "message": f"代理连接成功，出口 IP: {ip_info.get('ip', 'unknown')}"
+                        }
+
+                    last_error = f"代理返回错误状态码: {response.status_code}"
+                    if response.status_code >= 500 and attempt == 0:
+                        time.sleep(1)
+                        continue
+                    return {
+                        "success": False,
+                        "message": last_error
+                    }
+                except Exception as e:
+                    last_error = str(e)
+                    if attempt == 0:
+                        time.sleep(1)
+                        continue
+
+            return {
+                "success": False,
+                "message": f"代理连接失败: {last_error}"
+            }
 
         except Exception as e:
             return {
@@ -620,7 +772,6 @@ async def test_all_proxies():
         for proxy in proxies:
             proxy_url = proxy.proxy_url
             test_url = "https://api.ipify.org?format=json"
-            start_time = time.time()
 
             try:
                 proxies_dict = {
@@ -628,30 +779,50 @@ async def test_all_proxies():
                     "https": proxy_url
                 }
 
-                response = cffi_requests.get(
-                    test_url,
-                    proxies=proxies_dict,
-                    timeout=3,
-                    impersonate="chrome110"
-                )
+                last_error = None
+                success_payload = None
+                for attempt in range(2):
+                    start_time = time.time()
+                    try:
+                        response = cffi_requests.get(
+                            test_url,
+                            proxies=proxies_dict,
+                            timeout=5,
+                            impersonate="chrome110"
+                        )
 
-                elapsed_time = time.time() - start_time
+                        elapsed_time = time.time() - start_time
 
-                if response.status_code == 200:
-                    ip_info = response.json()
-                    results.append({
-                        "id": proxy.id,
-                        "name": proxy.name,
-                        "success": True,
-                        "ip": ip_info.get("ip", ""),
-                        "response_time": round(elapsed_time * 1000)
-                    })
+                        if response.status_code == 200:
+                            ip_info = response.json()
+                            success_payload = {
+                                "id": proxy.id,
+                                "name": proxy.name,
+                                "success": True,
+                                "ip": ip_info.get("ip", ""),
+                                "response_time": round(elapsed_time * 1000)
+                            }
+                            break
+
+                        last_error = f"状态码: {response.status_code}"
+                        if response.status_code >= 500 and attempt == 0:
+                            time.sleep(1)
+                            continue
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        if attempt == 0:
+                            time.sleep(1)
+                            continue
+
+                if success_payload:
+                    results.append(success_payload)
                 else:
                     results.append({
                         "id": proxy.id,
                         "name": proxy.name,
                         "success": False,
-                        "message": f"状态码: {response.status_code}"
+                        "message": last_error or "未知错误"
                     })
 
             except Exception as e:
@@ -689,6 +860,14 @@ async def disable_proxy(proxy_id: int):
         if not proxy:
             raise HTTPException(status_code=404, detail="代理不存在")
         return {"success": True, "message": "代理已禁用"}
+
+
+@router.post("/proxies/cleanup-disabled")
+async def cleanup_disabled_proxies():
+    """删除所有已禁用代理"""
+    with get_db() as db:
+        deleted = crud.delete_disabled_proxies(db)
+        return {"success": True, "deleted": deleted, "message": f"已删除 {deleted} 个禁用代理"}
 
 
 # ============== Outlook 设置 ==============

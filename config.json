@@ -1,0 +1,25 @@
+{
+  "_comment": "Codex Manager (Cloudflare temp email)",
+  "total_accounts": 3,
+  "email_backend": "cloudflare",
+  "cf_mail_base_url": "https://cnus.qzz.io",
+  "cf_admin_passwords": [
+    "Hellobi828"
+  ],
+  "delete_temp_mail_after_otp": true,
+  "temp_mail_audit_file": "cloudmail_temp_accounts.jsonl",
+  "proxy": "proxies.txt",
+  "token_json_dir": "codex_tokens",
+  "upload_api_url": "http://127.0.0.1:8317/v0/management/auth-files",
+  "upload_api_token": "Hellobi828",
+  "route_proxy_pool_via_gateway": true,
+  "proxy_pool_gateway": "192.168.10.1",
+  "route_dev": "ens3",
+  "sleep_min": 20,
+  "sleep_max": 40,
+  "backoff_on_403": 180,
+  "consecutive_403_limit": 2,
+  "notify_telegram": true,
+  "telegram_bot_token": "8399175742:AAEI4r8MyStdRgYX-8EaJ2SkD8-nVIWVBhY",
+  "telegram_chat_id": "563241069"
+}

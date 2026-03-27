@@ -340,6 +340,24 @@ class TempMailService(BaseEmailService):
                     if not mail_id or mail_id in seen_mail_ids:
                         continue
 
+                    # 使用 otp_sent_at 过滤旧邮件，避免重复拿到上一个阶段的验证码
+                    if otp_sent_at:
+                        ts_raw = mail.get("createdAt") or mail.get("created_at") or mail.get("date")
+                        ts_value = None
+                        if isinstance(ts_raw, (int, float)):
+                            ts_value = float(ts_raw)
+                            if ts_value > 1e12:  # 兼容毫秒时间戳
+                                ts_value /= 1000.0
+                        elif isinstance(ts_raw, str):
+                            try:
+                                from datetime import datetime
+                                ts_value = datetime.fromisoformat(ts_raw.replace('Z', '+00:00')).timestamp()
+                            except Exception:
+                                ts_value = None
+                        if ts_value is not None and ts_value + 1 < otp_sent_at:
+                            logger.debug(f"跳过旧邮件 {mail_id}: ts={ts_value}, otp_sent_at={otp_sent_at}")
+                            continue
+
                     seen_mail_ids.add(mail_id)
 
                     parsed = self._extract_mail_fields(mail)
@@ -347,13 +365,16 @@ class TempMailService(BaseEmailService):
                     subject = parsed["subject"]
                     body_text = parsed["body"]
                     raw_text = parsed["raw"]
-                    content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
 
                     # 只处理 OpenAI 邮件
-                    if "openai" not in sender and "openai" not in content.lower():
+                    preview_content = f"{sender}\n{subject}\n{body_text}".strip()
+                    if "openai" not in sender and "openai" not in preview_content.lower() and "openai" not in raw_text.lower():
                         continue
 
-                    code = self._extract_otp_from_text(content, pattern)
+                    # 优先从正文/preview 提验证码，raw 只作为最后兜底
+                    code = self._extract_otp_from_text(preview_content, pattern)
+                    if not code and raw_text:
+                        code = self._extract_otp_from_text(raw_text, pattern)
                     if code:
                         logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
                         self.update_status(True)

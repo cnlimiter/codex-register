@@ -6,13 +6,20 @@ services:
     environment:
       - WEBUI_HOST=0.0.0.0
       - WEBUI_PORT=15555
-      - WEBUI_ACCESS_PASSWORD=admin123
+      - WEBUI_ACCESS_PASSWORD=Hellobi828
       - DEBUG=0
       - LOG_LEVEL=info
+      - ROUTE_DEV=ens3
+      - PROXY_GATEWAY=192.168.10.1
+      - DEFAULT_GATEWAY=192.168.10.254
+    cap_add:
+      - NET_ADMIN
     volumes:
       # 挂载数据目录以持久化数据库和日志
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./scripts:/app/scripts
+      - ./proxies.txt:/app/proxies.txt
     healthcheck:
       test:
         - CMD

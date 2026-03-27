@@ -1281,12 +1281,13 @@ function connectBatchWebSocket(batchId) {
                     if (!toastShown) {
                         toastShown = true;
                         if (data.status === 'completed') {
-                            addLog('success', `[完成] Outlook 批量任务完成！成功: ${data.success}, 失败: ${data.failed}, 跳过: ${data.skipped || 0}`);
+                            const batchLabel = isOutlookBatchMode ? 'Outlook 批量' : '批量';
+                            addLog('success', `[完成] ${batchLabel}任务完成！成功: ${data.success}, 失败: ${data.failed}, 跳过: ${data.skipped || 0}`);
                             if (data.success > 0) {
-                                toast.success(`Outlook 批量注册完成，成功 ${data.success} 个`);
+                                toast.success(`${batchLabel}注册完成，成功 ${data.success} 个`);
                                 loadRecentAccounts();
                             } else {
-                                toast.warning('Outlook 批量注册完成，但没有成功注册任何账号');
+                                toast.warning(`${batchLabel}注册完成，但没有成功注册任何账号`);
                             }
                         } else if (data.status === 'failed') {
                             addLog('error', '[错误] 批量任务执行失败');

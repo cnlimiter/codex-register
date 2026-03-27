@@ -19,6 +19,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
         python3-dev \
+        iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件并安装

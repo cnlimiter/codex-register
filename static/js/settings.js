@@ -31,6 +31,10 @@ const elements = {
     proxiesTable: document.getElementById('proxies-table'),
     addProxyBtn: document.getElementById('add-proxy-btn'),
     testAllProxiesBtn: document.getElementById('test-all-proxies-btn'),
+    cleanupDisabledProxiesBtn: document.getElementById('cleanup-disabled-proxies-btn'),
+    importProxiesBtn: document.getElementById('import-proxies-btn'),
+    proxyImportText: document.getElementById('proxy-import-text'),
+    proxyImportReplace: document.getElementById('proxy-import-replace'),
     addProxyModal: document.getElementById('add-proxy-modal'),
     proxyItemForm: document.getElementById('proxy-item-form'),
     closeProxyModal: document.getElementById('close-proxy-modal'),
@@ -204,6 +208,14 @@ function initEventListeners() {
 
     if (elements.testAllProxiesBtn) {
         elements.testAllProxiesBtn.addEventListener('click', handleTestAllProxies);
+    }
+
+    if (elements.cleanupDisabledProxiesBtn) {
+        elements.cleanupDisabledProxiesBtn.addEventListener('click', handleCleanupDisabledProxies);
+    }
+
+    if (elements.importProxiesBtn) {
+        elements.importProxiesBtn.addEventListener('click', handleImportProxies);
     }
 
     if (elements.closeProxyModal) {
@@ -763,6 +775,49 @@ function escapeHtml(text) {
 // ============================================================================
 
 // 加载代理列表
+async function handleImportProxies() {
+    let text = elements.proxyImportText?.value?.trim() || '';
+    const replace = !!elements.proxyImportReplace?.checked;
+
+    const btn = elements.importProxiesBtn;
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '导入中...';
+
+    try {
+        const result = await api.post('/settings/proxies/import', { text, replace });
+        if (!text && result.loaded_from_file) {
+            const loaded = await fetch('/proxies.txt').then(r => r.ok ? r.text() : '');
+            if (loaded && elements.proxyImportText) {
+                elements.proxyImportText.value = loaded.trim();
+            }
+        }
+        const msg = `导入完成：新增 ${result.inserted}，重复跳过 ${result.skipped}，错误 ${result.errors?.length || 0}`;
+        if (result.errors && result.errors.length > 0) {
+            console.warn('代理导入错误', result.errors);
+        }
+        toast.success(msg);
+        await loadProxies();
+    } catch (e) {
+        toast.error('导入失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText || '📥 导入代理';
+    }
+}
+
+async function handleCleanupDisabledProxies() {
+    const ok = await confirm('确定要删除所有已禁用代理吗？');
+    if (!ok) return;
+    try {
+        const result = await api.post('/settings/proxies/cleanup-disabled');
+        toast.success(result.message || `已删除 ${result.deleted || 0} 个禁用代理`);
+        await loadProxies();
+    } catch (e) {
+        toast.error('删除失败: ' + e.message);
+    }
+}
+
 async function loadProxies() {
     try {
         const data = await api.get('/settings/proxies');

@@ -9,6 +9,7 @@ import time
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import time
 
 from curl_cffi import requests as cffi_requests
 
@@ -98,61 +99,75 @@ class TokenRefreshManager:
         """
         result = TokenRefreshResult(success=False)
 
-        try:
-            session = self._create_session()
+        for attempt in range(2):
+            try:
+                session = self._create_session()
 
-            # 设置会话 Cookie
-            session.cookies.set(
-                "__Secure-next-auth.session-token",
-                session_token,
-                domain=".chatgpt.com",
-                path="/"
-            )
+                # 设置会话 Cookie
+                session.cookies.set(
+                    "__Secure-next-auth.session-token",
+                    session_token,
+                    domain=".chatgpt.com",
+                    path="/"
+                )
 
-            # 请求会话端点
-            response = session.get(
-                self.SESSION_URL,
-                headers={
-                    "accept": "application/json",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                },
-                timeout=30
-            )
+                # 请求会话端点
+                response = session.get(
+                    self.SESSION_URL,
+                    headers={
+                        "accept": "application/json",
+                        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    },
+                    timeout=45
+                )
 
-            if response.status_code != 200:
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # 提取 access_token
+                    access_token = data.get("accessToken")
+                    if not access_token:
+                        result.error_message = "Session token 刷新失败: 未找到 accessToken"
+                        logger.warning(result.error_message)
+                        return result
+
+                    # 提取过期时间
+                    expires_at = None
+                    expires_str = data.get("expires")
+                    if expires_str:
+                        try:
+                            expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+                        except:
+                            pass
+
+                    result.success = True
+                    result.access_token = access_token
+                    result.expires_at = expires_at
+
+                    logger.info(f"Session token 刷新成功，过期时间: {expires_at}")
+                    return result
+
+                if response.status_code in (401, 403):
+                    result.error_message = f"Session token 刷新失败: HTTP {response.status_code}"
+                    logger.warning(result.error_message)
+                    return result
+
                 result.error_message = f"Session token 刷新失败: HTTP {response.status_code}"
                 logger.warning(result.error_message)
+                if response.status_code >= 500 and attempt == 0:
+                    time.sleep(2)
+                    continue
                 return result
 
-            data = response.json()
-
-            # 提取 access_token
-            access_token = data.get("accessToken")
-            if not access_token:
-                result.error_message = "Session token 刷新失败: 未找到 accessToken"
-                logger.warning(result.error_message)
+            except Exception as e:
+                result.error_message = f"Session token 刷新异常: {str(e)}"
+                logger.error(result.error_message)
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
                 return result
 
-            # 提取过期时间
-            expires_at = None
-            expires_str = data.get("expires")
-            if expires_str:
-                try:
-                    expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
-                except:
-                    pass
-
-            result.success = True
-            result.access_token = access_token
-            result.expires_at = expires_at
-
-            logger.info(f"Session token 刷新成功，过期时间: {expires_at}")
-            return result
-
-        except Exception as e:
-            result.error_message = f"Session token 刷新异常: {str(e)}"
-            logger.error(result.error_message)
-            return result
+        return result
 
     def refresh_by_oauth_token(
         self,
@@ -171,62 +186,76 @@ class TokenRefreshManager:
         """
         result = TokenRefreshResult(success=False)
 
-        try:
-            session = self._create_session()
+        for attempt in range(2):
+            try:
+                session = self._create_session()
 
-            # 使用配置的 client_id 或默认值
-            client_id = client_id or self.settings.openai_client_id
+                # 使用配置的 client_id 或默认值
+                client_id = client_id or self.settings.openai_client_id
 
-            # 构建请求体
-            token_data = {
-                "client_id": client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "redirect_uri": self.settings.openai_redirect_uri
-            }
+                # 构建请求体
+                token_data = {
+                    "client_id": client_id,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "redirect_uri": self.settings.openai_redirect_uri
+                }
 
-            response = session.post(
-                self.TOKEN_URL,
-                headers={
-                    "content-type": "application/x-www-form-urlencoded",
-                    "accept": "application/json"
-                },
-                data=token_data,
-                timeout=30
-            )
+                response = session.post(
+                    self.TOKEN_URL,
+                    headers={
+                        "content-type": "application/x-www-form-urlencoded",
+                        "accept": "application/json"
+                    },
+                    data=token_data,
+                    timeout=45
+                )
 
-            if response.status_code != 200:
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # 提取令牌
+                    access_token = data.get("access_token")
+                    new_refresh_token = data.get("refresh_token", refresh_token)
+                    expires_in = data.get("expires_in", 3600)
+
+                    if not access_token:
+                        result.error_message = "OAuth token 刷新失败: 未找到 access_token"
+                        logger.warning(result.error_message)
+                        return result
+
+                    # 计算过期时间
+                    expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+
+                    result.success = True
+                    result.access_token = access_token
+                    result.refresh_token = new_refresh_token
+                    result.expires_at = expires_at
+
+                    logger.info(f"OAuth token 刷新成功，过期时间: {expires_at}")
+                    return result
+
+                if response.status_code in (401, 403):
+                    result.error_message = self._parse_oauth_error(response)
+                    logger.warning(f"{result.error_message}, 响应: {response.text[:200]}")
+                    return result
+
                 result.error_message = self._parse_oauth_error(response)
                 logger.warning(f"{result.error_message}, 响应: {response.text[:200]}")
+                if response.status_code >= 500 and attempt == 0:
+                    time.sleep(2)
+                    continue
                 return result
 
-            data = response.json()
-
-            # 提取令牌
-            access_token = data.get("access_token")
-            new_refresh_token = data.get("refresh_token", refresh_token)
-            expires_in = data.get("expires_in", 3600)
-
-            if not access_token:
-                result.error_message = "OAuth token 刷新失败: 未找到 access_token"
-                logger.warning(result.error_message)
+            except Exception as e:
+                result.error_message = f"OAuth token 刷新异常: {str(e)}"
+                logger.error(result.error_message)
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
                 return result
 
-            # 计算过期时间
-            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
-
-            result.success = True
-            result.access_token = access_token
-            result.refresh_token = new_refresh_token
-            result.expires_at = expires_at
-
-            logger.info(f"OAuth token 刷新成功，过期时间: {expires_at}")
-            return result
-
-        except Exception as e:
-            result.error_message = f"OAuth token 刷新异常: {str(e)}"
-            logger.error(result.error_message)
-            return result
+        return result
 
     def refresh_account(self, account: Account) -> TokenRefreshResult:
         """
@@ -275,30 +304,42 @@ class TokenRefreshManager:
         Returns:
             Tuple[bool, Optional[str]]: (是否有效, 错误信息)
         """
-        try:
-            session = self._create_session()
+        last_error: Optional[str] = None
+        for attempt in range(2):
+            try:
+                session = self._create_session()
 
-            # 调用 OpenAI API 验证 token
-            response = session.get(
-                "https://chatgpt.com/backend-api/me",
-                headers={
-                    "authorization": f"Bearer {access_token}",
-                    "accept": "application/json"
-                },
-                timeout=30
-            )
+                # 调用 OpenAI API 验证 token
+                response = session.get(
+                    "https://chatgpt.com/backend-api/me",
+                    headers={
+                        "authorization": f"Bearer {access_token}",
+                        "accept": "application/json"
+                    },
+                    timeout=45
+                )
 
-            if response.status_code == 200:
-                return True, None
-            elif response.status_code == 401:
-                return False, "Token 无效或已过期"
-            elif response.status_code == 403:
-                return False, "账号可能被封禁"
-            else:
-                return False, f"验证失败: HTTP {response.status_code}"
+                if response.status_code == 200:
+                    return True, None
+                elif response.status_code == 401:
+                    return False, "Token 无效或已过期"
+                elif response.status_code == 403:
+                    return False, "账号可能被封禁"
+                else:
+                    last_error = f"验证失败: HTTP {response.status_code}"
+                    if response.status_code >= 500 and attempt == 0:
+                        time.sleep(2)
+                        continue
+                    return False, last_error
 
-        except Exception as e:
-            return False, f"验证异常: {str(e)}"
+            except Exception as e:
+                last_error = f"验证异常: {str(e)}"
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return False, last_error
+
+        return False, last_error
 
 
 def refresh_account_token(account_id: int, proxy_url: Optional[str] = None) -> TokenRefreshResult:
@@ -355,7 +396,14 @@ def validate_account_token(account_id: int, proxy_url: Optional[str] = None) -> 
             return False, "账号不存在"
 
         if not account.access_token:
+            crud.update_account(db, account_id, status="failed")
             return False, "账号没有 access_token"
 
         manager = TokenRefreshManager(proxy_url=proxy_url)
-        return manager.validate_token(account.access_token)
+        is_valid, error = manager.validate_token(account.access_token)
+        crud.update_account(
+            db,
+            account_id,
+            status="active" if is_valid else "failed",
+        )
+        return is_valid, error
