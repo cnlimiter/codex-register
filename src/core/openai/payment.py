@@ -257,28 +257,49 @@ def check_subscription_status(account: Account, proxy: Optional[str] = None) -> 
         "Content-Type": "application/json",
     }
 
-    resp = cffi_requests.get(
-        "https://chatgpt.com/backend-api/me",
-        headers=headers,
-        proxies=_build_proxies(proxy),
-        timeout=20,
-        impersonate="chrome110",
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    last_error = None
+    for attempt in range(2):
+        try:
+            resp = cffi_requests.get(
+                "https://chatgpt.com/backend-api/me",
+                headers=headers,
+                proxies=_build_proxies(proxy),
+                timeout=45,
+                impersonate="chrome110",
+            )
 
-    # 解析订阅类型
-    plan = data.get("plan_type") or ""
-    if "team" in plan.lower():
-        return "team"
-    if "plus" in plan.lower():
-        return "plus"
+            if resp.status_code == 200:
+                data = resp.json()
 
-    # 尝试从 orgs 或 workspace 信息判断
-    orgs = data.get("orgs", {}).get("data", [])
-    for org in orgs:
-        settings_ = org.get("settings", {})
-        if settings_.get("workspace_plan_type") in ("team", "enterprise"):
-            return "team"
+                # 解析订阅类型
+                plan = data.get("plan_type") or ""
+                if "team" in plan.lower():
+                    return "team"
+                if "plus" in plan.lower():
+                    return "plus"
 
-    return "free"
+                # 尝试从 orgs 或 workspace 信息判断
+                orgs = data.get("orgs", {}).get("data", [])
+                for org in orgs:
+                    settings_ = org.get("settings", {})
+                    if settings_.get("workspace_plan_type") in ("team", "enterprise"):
+                        return "team"
+
+                return "free"
+
+            if resp.status_code in (401, 403):
+                resp.raise_for_status()
+
+            last_error = f"HTTP {resp.status_code}"
+            if resp.status_code >= 500 and attempt == 0:
+                time.sleep(2)
+                continue
+            resp.raise_for_status()
+        except Exception as e:
+            last_error = str(e)
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            raise
+
+    raise RuntimeError(last_error or "subscription check failed")

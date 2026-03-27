@@ -96,8 +96,22 @@
                         <div style="display: flex; gap: var(--spacing-sm);">
                             <button class="btn btn-secondary btn-sm" id="test-all-proxies-btn">🔌 测试全部</button>
                             <button class="btn btn-danger btn-sm" id="delete-disabled-proxies-btn" disabled>🧹 删除禁用项</button>
+                            <button class="btn btn-secondary btn-sm" id="cleanup-disabled-proxies-btn">🧹 删除禁用</button>
                             <button class="btn btn-secondary btn-sm" id="batch-import-proxy-btn">📋 批量导入</button>
                             <button class="btn btn-primary btn-sm" id="add-proxy-btn">➕ 添加代理</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="proxy-import-text">批量导入代理（支持 proxies.txt 粘贴）</label>
+                            <textarea id="proxy-import-text" rows="6" placeholder="每行一个代理，例如：&#10;http://1.2.3.4:8080&#10;socks5://5.6.7.8:1080&#10;user:pass@9.9.9.9:7890"></textarea>
+                            <div class="form-actions" style="margin-top: var(--spacing-sm);">
+                                <label style="display:flex;align-items:center;gap:8px;">
+                                    <input type="checkbox" id="proxy-import-replace">
+                                    导入前清空现有代理
+                                </label>
+                                <button class="btn btn-secondary btn-sm" id="import-proxies-btn" type="button">📥 导入代理</button>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body" style="padding: 0;">
