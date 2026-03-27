@@ -833,7 +833,7 @@ async def batch_import_proxies(request: ProxyBatchImportRequest):
 
 @router.post("/proxies/{proxy_id}/test")
 async def test_proxy_item(proxy_id: int):
-    """测试单个代理"""
+    """测试单个代理；失败时自动禁用。"""
     import time
     from curl_cffi import requests as cffi_requests
 
@@ -877,31 +877,22 @@ async def test_proxy_item(proxy_id: int):
                     if response.status_code >= 500 and attempt == 0:
                         time.sleep(1)
                         continue
-                    return {
-                        "success": False,
-                        "message": last_error
-                    }
+                    return _auto_disable_proxy_on_failure(db, proxy, last_error)
                 except Exception as e:
                     last_error = str(e)
                     if attempt == 0:
                         time.sleep(1)
                         continue
 
-            return {
-                "success": False,
-                "message": f"代理连接失败: {last_error}"
-            }
+            return _auto_disable_proxy_on_failure(db, proxy, f"代理连接失败: {last_error}")
 
         except Exception as e:
-            return {
-                "success": False,
-                "message": f"代理连接失败: {str(e)}"
-            }
+            return _auto_disable_proxy_on_failure(db, proxy, f"代理连接失败: {str(e)}")
 
 
 @router.post("/proxies/test-all")
 async def test_all_proxies():
-    """测试所有启用的代理"""
+    """测试所有启用的代理；失败时自动禁用。"""
     import time
     from curl_cffi import requests as cffi_requests
 
@@ -909,6 +900,7 @@ async def test_all_proxies():
         proxies = crud.get_enabled_proxies(db)
 
         results = []
+        auto_disabled_count = 0
         for proxy in proxies:
             proxy_url = proxy.proxy_url
             test_url = "https://api.ipify.org?format=json"
@@ -958,19 +950,27 @@ async def test_all_proxies():
                 if success_payload:
                     results.append(success_payload)
                 else:
+                    failure = _auto_disable_proxy_on_failure(db, proxy, last_error or "未知错误")
+                    if failure.get("auto_disabled"):
+                        auto_disabled_count += 1
                     results.append({
                         "id": proxy.id,
                         "name": proxy.name,
                         "success": False,
-                        "message": last_error or "未知错误"
+                        "auto_disabled": failure.get("auto_disabled", False),
+                        "message": failure["message"]
                     })
 
             except Exception as e:
+                failure = _auto_disable_proxy_on_failure(db, proxy, str(e))
+                if failure.get("auto_disabled"):
+                    auto_disabled_count += 1
                 results.append({
                     "id": proxy.id,
                     "name": proxy.name,
                     "success": False,
-                    "message": str(e)
+                    "auto_disabled": failure.get("auto_disabled", False),
+                    "message": failure["message"]
                 })
 
         success_count = sum(1 for r in results if r["success"])
@@ -978,6 +978,7 @@ async def test_all_proxies():
             "total": len(proxies),
             "success": success_count,
             "failed": len(proxies) - success_count,
+            "auto_disabled": auto_disabled_count,
             "results": results
         }
 
