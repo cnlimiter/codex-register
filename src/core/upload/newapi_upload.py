@@ -117,10 +117,10 @@ def upload_to_newapi(
         headers["Content-Type"] = "application/json; charset=utf-8"
 
         logger.info("NEWAPI 上传 URL: %s", url)
-        logger.info("NEWAPI 请求头: %s", {
-            **headers,
-            "Authorization": f"Bearer {_mask_header_value(headers['Authorization'][7:])}",
-        })
+        safe_headers = dict(headers)
+        if "Authorization" in safe_headers:
+            safe_headers["Authorization"] = "REDACTED"
+        logger.debug("NEWAPI 请求头: %s", safe_headers)
 
         resp = cffi_requests.post(
             url,
