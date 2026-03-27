@@ -5,10 +5,10 @@ Tempmail.lol 邮箱服务实现
 import re
 import time
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Callable, Optional, Dict, Any, List
 from datetime import datetime, timezone
 
-from .base import BaseEmailService, EmailServiceError, EmailServiceType, get_email_code_settings
+from .base import BaseEmailService, EmailServiceError, EmailServiceType, OTPNoOpenAISenderEmailServiceError, get_email_code_settings
 from ..core.http_client import HTTPClient, RequestConfig
 from ..config.constants import OTP_CODE_PATTERN
 
@@ -247,6 +247,13 @@ class TempmailService(BaseEmailService):
                     lambda item: item.get("date") if isinstance(item, dict) else None,
                 )
 
+                if ordered_emails:
+                    if not self._batch_has_openai_sender(
+                        ordered_emails,
+                        lambda item: item.get("from") if isinstance(item, dict) else None,
+                    ):
+                        raise OTPNoOpenAISenderEmailServiceError()
+
                 for msg in ordered_emails:
                     if not isinstance(msg, dict):
                         continue
@@ -276,7 +283,7 @@ class TempmailService(BaseEmailService):
                     content = "\n".join([sender, subject, body, html])
 
                     # 检查是否是 OpenAI 邮件
-                    if "openai" not in sender and "openai" not in content.lower():
+                    if not self._is_openai_candidate_message(sender, subject, body, html):
                         continue
 
                     # 提取验证码
@@ -290,6 +297,8 @@ class TempmailService(BaseEmailService):
                         return code
 
             except Exception as e:
+                if isinstance(e, OTPNoOpenAISenderEmailServiceError):
+                    raise
                 logger.debug(f"检查邮件时出错: {e}")
 
             # 等待一段时间再检查
@@ -370,7 +379,7 @@ class TempmailService(BaseEmailService):
         self,
         email: str,
         token: str,
-        callback: callable = None,
+        callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout: int = 120
     ) -> Optional[str]:
         """

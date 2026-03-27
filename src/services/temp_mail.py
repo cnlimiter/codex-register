@@ -15,7 +15,7 @@ from email.policy import default as email_policy
 from html import unescape
 from typing import Optional, Dict, Any, List
 
-from .base import BaseEmailService, EmailServiceError, EmailServiceType, RateLimitedEmailServiceError, get_email_code_settings
+from .base import BaseEmailService, EmailServiceError, EmailServiceType, OTPNoOpenAISenderEmailServiceError, RateLimitedEmailServiceError, get_email_code_settings
 from ..core.http_client import HTTPClient, RequestConfig
 from ..config.constants import OTP_CODE_PATTERN
 
@@ -95,10 +95,7 @@ class TempMailService(BaseEmailService):
                     charset = part.get_content_charset() or "utf-8"
                     text = payload.decode(charset, errors="replace") if payload else ""
                 except Exception:
-                    try:
-                        text = part.get_content()
-                    except Exception:
-                        text = ""
+                    text = str(part.get_payload() or "")
 
                 if content_type == "text/html":
                     text = re.sub(r"<[^>]+>", " ", text)
@@ -109,10 +106,7 @@ class TempMailService(BaseEmailService):
                 charset = message.get_content_charset() or "utf-8"
                 body = payload.decode(charset, errors="replace") if payload else ""
             except Exception:
-                try:
-                    body = message.get_content()
-                except Exception:
-                    body = str(message.get_payload() or "")
+                body = str(message.get_payload() or "")
 
             if "html" in (message.get_content_type() or "").lower():
                 body = re.sub(r"<[^>]+>", " ", body)
@@ -346,6 +340,17 @@ class TempMailService(BaseEmailService):
                     ) if isinstance(item, dict) else None,
                 )
 
+                if ordered_mails:
+                    if not self._batch_has_openai_sender(
+                        ordered_mails,
+                        lambda item: (
+                            item.get("from")
+                            or item.get("sender")
+                            or item.get("fromAddress")
+                        ) if isinstance(item, dict) else None,
+                    ):
+                        raise OTPNoOpenAISenderEmailServiceError()
+
                 for mail in ordered_mails:
                     mail_id = mail.get("id")
                     if not mail_id or mail_id in seen_mail_ids:
@@ -368,7 +373,7 @@ class TempMailService(BaseEmailService):
                     content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
 
                     # 只处理 OpenAI 邮件
-                    if "openai" not in sender and "openai" not in content.lower():
+                    if not self._is_openai_candidate_message(sender, subject, body_text, raw_text):
                         continue
 
                     code = self._extract_otp_from_text(content, pattern)
@@ -380,6 +385,8 @@ class TempMailService(BaseEmailService):
                         return code
 
             except Exception as e:
+                if isinstance(e, OTPNoOpenAISenderEmailServiceError):
+                    raise
                 logger.debug(f"检查 TempMail 邮件时出错: {e}")
 
             time.sleep(poll_interval)

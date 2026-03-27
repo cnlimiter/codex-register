@@ -4,12 +4,10 @@
 
 import logging
 import threading
-import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
 
 from .base import ProviderType, ProviderHealth, ProviderStatus
-from .providers.base import OutlookProvider
 
 
 logger = logging.getLogger(__name__)
@@ -39,45 +37,52 @@ class HealthChecker:
         self.disable_duration = disable_duration
         self.recovery_check_interval = recovery_check_interval
 
-        # 提供者健康状态: ProviderType -> ProviderHealth
-        self._health_status: Dict[ProviderType, ProviderHealth] = {}
+        # 提供者健康状态: (account_email, provider_type) -> ProviderHealth
+        self._health_status: Dict[Tuple[str, ProviderType], ProviderHealth] = {}
         self._lock = threading.Lock()
 
-        # 初始化所有提供者的健康状态
-        for provider_type in ProviderType:
-            self._health_status[provider_type] = ProviderHealth(
-                provider_type=provider_type
-            )
+    @staticmethod
+    def _normalize_account_email(account_email: Optional[str]) -> str:
+        return (account_email or "__global__").strip().lower()
 
-    def get_health(self, provider_type: ProviderType) -> ProviderHealth:
+    def _state_key(self, provider_type: ProviderType, account_email: Optional[str]) -> Tuple[str, ProviderType]:
+        return (self._normalize_account_email(account_email), provider_type)
+
+    def _ensure_health(self, provider_type: ProviderType, account_email: Optional[str]) -> ProviderHealth:
+        key = self._state_key(provider_type, account_email)
+        health = self._health_status.get(key)
+        if health is None:
+            health = ProviderHealth(provider_type=provider_type)
+            self._health_status[key] = health
+        return health
+
+    def get_health(self, provider_type: ProviderType, account_email: Optional[str] = None) -> ProviderHealth:
         """获取提供者的健康状态"""
         with self._lock:
-            return self._health_status.get(provider_type, ProviderHealth(provider_type=provider_type))
+            return self._ensure_health(provider_type, account_email)
 
-    def record_success(self, provider_type: ProviderType):
+    def record_success(self, provider_type: ProviderType, account_email: Optional[str] = None):
         """记录成功操作"""
         with self._lock:
-            health = self._health_status.get(provider_type)
-            if health:
-                health.record_success()
-                logger.debug(f"{provider_type.value} 记录成功")
+            health = self._ensure_health(provider_type, account_email)
+            health.record_success()
+            logger.debug(f"{provider_type.value} 记录成功 ({self._normalize_account_email(account_email)})")
 
-    def record_failure(self, provider_type: ProviderType, error: str):
+    def record_failure(self, provider_type: ProviderType, error: str, account_email: Optional[str] = None):
         """记录失败操作"""
         with self._lock:
-            health = self._health_status.get(provider_type)
-            if health:
-                health.record_failure(error)
+            health = self._ensure_health(provider_type, account_email)
+            health.record_failure(error)
 
-                # 检查是否需要禁用
-                if health.should_disable(self.failure_threshold):
-                    health.disable(self.disable_duration)
-                    logger.warning(
-                        f"{provider_type.value} 已禁用 {self.disable_duration} 秒，"
-                        f"原因: {error}"
-                    )
+            # 检查是否需要禁用
+            if health.should_disable(self.failure_threshold):
+                health.disable(self.disable_duration)
+                logger.warning(
+                    f"{provider_type.value} 已禁用 {self.disable_duration} 秒 "
+                    f"({self._normalize_account_email(account_email)})，原因: {error}"
+                )
 
-    def is_available(self, provider_type: ProviderType) -> bool:
+    def is_available(self, provider_type: ProviderType, account_email: Optional[str] = None) -> bool:
         """
         检查提供者是否可用
 
@@ -87,13 +92,14 @@ class HealthChecker:
         Returns:
             是否可用
         """
-        health = self.get_health(provider_type)
+        health = self.get_health(provider_type, account_email)
 
         # 检查是否被禁用
         if health.is_disabled():
             remaining = (health.disabled_until - datetime.now()).total_seconds()
             logger.debug(
-                f"{provider_type.value} 已被禁用，剩余 {int(remaining)} 秒"
+                    f"{provider_type.value} 已被禁用，剩余 {int(remaining)} 秒 "
+                    f"({self._normalize_account_email(account_email)})"
             )
             return False
 
@@ -102,6 +108,7 @@ class HealthChecker:
     def get_available_providers(
         self,
         priority_order: Optional[List[ProviderType]] = None,
+        account_email: Optional[str] = None,
     ) -> List[ProviderType]:
         """
         获取可用的提供者列表
@@ -121,7 +128,7 @@ class HealthChecker:
 
         available = []
         for provider_type in priority_order:
-            if self.is_available(provider_type):
+            if self.is_available(provider_type, account_email):
                 available.append(provider_type)
 
         return available
@@ -129,6 +136,7 @@ class HealthChecker:
     def get_next_available_provider(
         self,
         priority_order: Optional[List[ProviderType]] = None,
+        account_email: Optional[str] = None,
     ) -> Optional[ProviderType]:
         """
         获取下一个可用的提供者
@@ -139,10 +147,10 @@ class HealthChecker:
         Returns:
             可用的提供者类型，如果没有返回 None
         """
-        available = self.get_available_providers(priority_order)
+        available = self.get_available_providers(priority_order, account_email)
         return available[0] if available else None
 
-    def force_disable(self, provider_type: ProviderType, duration: Optional[int] = None):
+    def force_disable(self, provider_type: ProviderType, duration: Optional[int] = None, account_email: Optional[str] = None):
         """
         强制禁用提供者
 
@@ -151,12 +159,11 @@ class HealthChecker:
             duration: 禁用时长（秒），默认使用配置值
         """
         with self._lock:
-            health = self._health_status.get(provider_type)
-            if health:
-                health.disable(duration or self.disable_duration)
-                logger.warning(f"{provider_type.value} 已强制禁用")
+            health = self._ensure_health(provider_type, account_email)
+            health.disable(duration or self.disable_duration)
+            logger.warning(f"{provider_type.value} 已强制禁用 ({self._normalize_account_email(account_email)})")
 
-    def force_enable(self, provider_type: ProviderType):
+    def force_enable(self, provider_type: ProviderType, account_email: Optional[str] = None):
         """
         强制启用提供者
 
@@ -164,12 +171,11 @@ class HealthChecker:
             provider_type: 提供者类型
         """
         with self._lock:
-            health = self._health_status.get(provider_type)
-            if health:
-                health.enable()
-                logger.info(f"{provider_type.value} 已启用")
+            health = self._ensure_health(provider_type, account_email)
+            health.enable()
+            logger.info(f"{provider_type.value} 已启用 ({self._normalize_account_email(account_email)})")
 
-    def get_all_health_status(self) -> Dict[str, Any]:
+    def get_all_health_status(self, account_email: Optional[str] = None) -> Dict[str, Any]:
         """
         获取所有提供者的健康状态
 
@@ -177,10 +183,16 @@ class HealthChecker:
             健康状态字典
         """
         with self._lock:
-            return {
-                provider_type.value: health.to_dict()
-                for provider_type, health in self._health_status.items()
-            }
+            normalized_account = self._normalize_account_email(account_email) if account_email is not None else None
+            grouped: Dict[str, Dict[str, Any]] = {}
+            for (acc_email, provider_type), health in self._health_status.items():
+                if normalized_account is not None and acc_email != normalized_account:
+                    continue
+                grouped.setdefault(acc_email, {})[provider_type.value] = health.to_dict()
+
+            if normalized_account is not None:
+                return grouped.get(normalized_account, {})
+            return grouped
 
     def check_and_recover(self):
         """
@@ -189,20 +201,17 @@ class HealthChecker:
         如果禁用时间已过，自动恢复提供者
         """
         with self._lock:
-            for provider_type, health in self._health_status.items():
+            for (account_email, provider_type), health in self._health_status.items():
                 if health.is_disabled():
                     # 检查是否可以恢复
                     if health.disabled_until and datetime.now() >= health.disabled_until:
                         health.enable()
-                        logger.info(f"{provider_type.value} 已自动恢复")
+                        logger.info(f"{provider_type.value} 已自动恢复 ({account_email})")
 
     def reset_all(self):
         """重置所有提供者的健康状态"""
         with self._lock:
-            for provider_type in ProviderType:
-                self._health_status[provider_type] = ProviderHealth(
-                    provider_type=provider_type
-                )
+            self._health_status.clear()
             logger.info("已重置所有提供者的健康状态")
 
 
@@ -235,14 +244,14 @@ class FailoverManager:
         self._current_index = 0
         self._lock = threading.Lock()
 
-    def get_current_provider(self) -> Optional[ProviderType]:
+    def get_current_provider(self, account_email: Optional[str] = None) -> Optional[ProviderType]:
         """
         获取当前提供者
 
         Returns:
             当前提供者类型，如果没有可用的返回 None
         """
-        available = self.health_checker.get_available_providers(self.priority_order)
+        available = self.health_checker.get_available_providers(self.priority_order, account_email)
         if not available:
             return None
 
@@ -252,14 +261,14 @@ class FailoverManager:
                 return available[self._current_index]
             return available[0]
 
-    def switch_to_next(self) -> Optional[ProviderType]:
+    def switch_to_next(self, account_email: Optional[str] = None) -> Optional[ProviderType]:
         """
         切换到下一个提供者
 
         Returns:
             下一个提供者类型，如果没有可用的返回 None
         """
-        available = self.health_checker.get_available_providers(self.priority_order)
+        available = self.health_checker.get_available_providers(self.priority_order, account_email)
         if not available:
             return None
 
@@ -269,22 +278,22 @@ class FailoverManager:
             logger.info(f"切换到提供者: {next_provider.value}")
             return next_provider
 
-    def on_provider_success(self, provider_type: ProviderType):
+    def on_provider_success(self, provider_type: ProviderType, account_email: Optional[str] = None):
         """
         提供者成功时调用
 
         Args:
             provider_type: 提供者类型
         """
-        self.health_checker.record_success(provider_type)
+        self.health_checker.record_success(provider_type, account_email)
 
         # 重置索引到成功的提供者
         with self._lock:
-            available = self.health_checker.get_available_providers(self.priority_order)
+            available = self.health_checker.get_available_providers(self.priority_order, account_email)
             if provider_type in available:
                 self._current_index = available.index(provider_type)
 
-    def on_provider_failure(self, provider_type: ProviderType, error: str):
+    def on_provider_failure(self, provider_type: ProviderType, error: str, account_email: Optional[str] = None):
         """
         提供者失败时调用
 
@@ -292,21 +301,21 @@ class FailoverManager:
             provider_type: 提供者类型
             error: 错误信息
         """
-        self.health_checker.record_failure(provider_type, error)
+        self.health_checker.record_failure(provider_type, error, account_email)
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self, account_email: Optional[str] = None) -> Dict[str, Any]:
         """
         获取故障切换状态
 
         Returns:
             状态字典
         """
-        current = self.get_current_provider()
+        current = self.get_current_provider(account_email)
         return {
             "current_provider": current.value if current else None,
             "priority_order": [p.value for p in self.priority_order],
             "available_providers": [
-                p.value for p in self.health_checker.get_available_providers(self.priority_order)
+                p.value for p in self.health_checker.get_available_providers(self.priority_order, account_email)
             ],
-            "health_status": self.health_checker.get_all_health_status(),
+            "health_status": self.health_checker.get_all_health_status(account_email),
         }

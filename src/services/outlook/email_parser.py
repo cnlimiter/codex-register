@@ -4,7 +4,7 @@
 
 import logging
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
 from ...config.constants import (
     OTP_CODE_SIMPLE_PATTERN,
@@ -33,6 +33,7 @@ class EmailParser:
         self,
         email: EmailMessage,
         target_email: Optional[str] = None,
+        require_recipient_match: bool = True,
     ) -> bool:
         """
         判断是否为 OpenAI 验证邮件
@@ -60,9 +61,31 @@ class EmailParser:
             logger.debug(f"邮件未包含验证关键词: {subject[:50]}")
             return False
 
-        # 3. 收件人检查已移除：别名邮件的 IMAP 头中收件人可能不匹配，只靠发件人+关键词判断
+        # 3. 可选收件人检查：默认启用，别名或转发场景可通过配置关闭
+        if require_recipient_match and target_email:
+            if not self._recipient_matches_target(email, target_email):
+                logger.debug("邮件收件人不匹配目标邮箱")
+                return False
+
         logger.debug(f"识别为 OpenAI 验证邮件: {subject[:50]}")
         return True
+
+    def _recipient_matches_target(self, email: EmailMessage, target_email: str) -> bool:
+        target = (target_email or "").strip().lower()
+        if not target:
+            return True
+
+        for recipient in email.recipients or []:
+            normalized = str(recipient or "").strip().lower()
+            if not normalized:
+                continue
+            if target == normalized:
+                return True
+            # 兼容 "Name <user@example.com>" 形式
+            if f"<{target}>" in normalized:
+                return True
+
+        return False
 
     def extract_verification_code(
         self,
@@ -123,11 +146,20 @@ class EmailParser:
             return match.group(1)
         return None
 
+    def has_openai_sender(self, emails: List[EmailMessage]) -> bool:
+        """判断邮件批次中是否至少存在一封 OpenAI 发件人邮件。"""
+        for email in emails:
+            sender = (email.sender or "").lower()
+            if any(pattern in sender for pattern in OPENAI_EMAIL_SENDERS):
+                return True
+        return False
+
     def find_verification_code_in_emails(
         self,
         emails: List[EmailMessage],
         target_email: Optional[str] = None,
         min_timestamp: int = 0,
+        require_recipient_match: bool = True,
         used_codes: Optional[set] = None,
     ) -> Optional[str]:
         """
@@ -152,7 +184,11 @@ class EmailParser:
                     continue
 
             # 检查是否是 OpenAI 验证邮件
-            if not self.is_openai_verification_email(email, target_email):
+            if not self.is_openai_verification_email(
+                email,
+                target_email,
+                require_recipient_match=require_recipient_match,
+            ):
                 continue
 
             # 提取验证码

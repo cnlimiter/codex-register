@@ -400,6 +400,7 @@ async function loadSettings() {
             document.getElementById('email-code-timeout').value = data.email_code.timeout || 120;
             document.getElementById('email-code-poll-interval').value = data.email_code.poll_interval || 3;
             document.getElementById('email-code-resend-max-retries').value = data.email_code.resend_max_retries ?? 2;
+            document.getElementById('email-code-non-openai-sender-resend-max-retries').value = data.email_code.non_openai_sender_resend_max_retries ?? 1;
         }
 
         // 加载 Outlook 设置
@@ -565,16 +566,22 @@ async function handleSaveEmailCode(e) {
     }
 
     const resendMaxRetries = parseInt(document.getElementById('email-code-resend-max-retries').value);
+    const nonOpenaiSenderResendMaxRetries = parseInt(document.getElementById('email-code-non-openai-sender-resend-max-retries').value);
 
     if (resendMaxRetries < 0 || resendMaxRetries > 10) {
         toast.error('重发次数必须在 0-10 之间');
+        return;
+    }
+    if (nonOpenaiSenderResendMaxRetries < 0 || nonOpenaiSenderResendMaxRetries > 10) {
+        toast.error('非 OpenAI 发件人重发次数必须在 0-10 之间');
         return;
     }
 
     const data = {
         timeout: timeout,
         poll_interval: pollInterval,
-        resend_max_retries: resendMaxRetries
+        resend_max_retries: resendMaxRetries,
+        non_openai_sender_resend_max_retries: nonOpenaiSenderResendMaxRetries
     };
 
     try {

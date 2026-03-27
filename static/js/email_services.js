@@ -16,9 +16,11 @@ const elements = {
     tempmailStatus: document.getElementById('tempmail-status'),
     totalEnabled: document.getElementById('total-enabled'),
 
-    // Outlook 导入
-    toggleOutlookImport: document.getElementById('toggle-outlook-import'),
-    outlookImportBody: document.getElementById('outlook-import-body'),
+    // Outlook 导入模态框
+    addOutlookBtn: document.getElementById('add-outlook-btn'),
+    outlookImportModal: document.getElementById('outlook-import-modal'),
+    closeOutlookImportModal: document.getElementById('close-outlook-import-modal'),
+    cancelOutlookImportBtn: document.getElementById('cancel-outlook-import-btn'),
     outlookImportData: document.getElementById('outlook-import-data'),
     outlookImportEnabled: document.getElementById('outlook-import-enabled'),
     outlookImportPriority: document.getElementById('outlook-import-priority'),
@@ -96,11 +98,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 事件监听
 function initEventListeners() {
-    // Outlook 导入展开/收起
-    elements.toggleOutlookImport.addEventListener('click', () => {
-        const isHidden = elements.outlookImportBody.style.display === 'none';
-        elements.outlookImportBody.style.display = isHidden ? 'block' : 'none';
-        elements.toggleOutlookImport.textContent = isHidden ? '收起' : '展开';
+    // Outlook 添加邮箱按钮 → 打开模态框
+    elements.addOutlookBtn.addEventListener('click', () => {
+        elements.outlookImportData.value = '';
+        elements.importResult.style.display = 'none';
+        elements.outlookImportModal.classList.add('active');
+    });
+
+    // 关闭 Outlook 导入模态框
+    const closeOutlookModal = () => elements.outlookImportModal.classList.remove('active');
+    elements.closeOutlookImportModal.addEventListener('click', closeOutlookModal);
+    elements.cancelOutlookImportBtn.addEventListener('click', closeOutlookModal);
+    elements.outlookImportModal.addEventListener('click', (e) => {
+        if (e.target === elements.outlookImportModal) closeOutlookModal();
     });
 
     // Outlook 导入

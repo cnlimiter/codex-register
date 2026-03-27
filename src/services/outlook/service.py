@@ -8,11 +8,12 @@ import threading
 import time
 from typing import Optional, Dict, Any, List
 
-from ..base import BaseEmailService, EmailServiceError, EmailServiceStatus, EmailServiceType, get_email_code_settings
+from ..base import BaseEmailService, EmailServiceError, OTPNoOpenAISenderEmailServiceError, get_email_code_settings
 from ...config.constants import EmailServiceType as ServiceType
+from ...config.settings import get_settings
 from .account import OutlookAccount
 from .base import ProviderType, EmailMessage
-from .email_parser import EmailParser, get_email_parser
+from .email_parser import get_email_parser
 from .health_checker import HealthChecker, FailoverManager
 from .providers.base import OutlookProvider, ProviderConfig
 from .providers.imap_old import IMAPOldProvider
@@ -215,7 +216,7 @@ class OutlookService(BaseEmailService):
         # 按优先级尝试各提供者
         for provider_type in priority:
             # 检查提供者是否可用
-            if not self.health_checker.is_available(provider_type):
+            if not self.health_checker.is_available(provider_type, account.email):
                 logger.debug(
                     f"[{account.email}] {provider_type.value} 不可用，跳过"
                 )
@@ -230,7 +231,7 @@ class OutlookService(BaseEmailService):
 
                         if emails:
                             # 成功获取邮件
-                            self.health_checker.record_success(provider_type)
+                            self.health_checker.record_success(provider_type, account.email)
                             logger.debug(
                                 f"[{account.email}] {provider_type.value} 获取到 {len(emails)} 封邮件"
                             )
@@ -239,7 +240,7 @@ class OutlookService(BaseEmailService):
             except Exception as e:
                 error_msg = str(e)
                 errors.append(f"{provider_type.value}: {error_msg}")
-                self.health_checker.record_failure(provider_type, error_msg)
+                self.health_checker.record_failure(provider_type, error_msg, account.email)
                 logger.warning(
                     f"[{account.email}] {provider_type.value} 获取邮件失败: {e}"
                 )
@@ -322,6 +323,7 @@ class OutlookService(BaseEmailService):
             f"[{email}] 开始获取验证码，超时 {actual_timeout}s，"
             f"提供者优先级: {[p.value for p in self.provider_priority]}"
         )
+        require_recipient_match = bool(self.config.get("require_recipient_match", True))
 
         # 初始化验证码去重集合
         if email not in self._used_codes:
@@ -353,11 +355,19 @@ class OutlookService(BaseEmailService):
                         f"[{email}] 第 {poll_count} 次轮询获取到 {len(emails)} 封邮件"
                     )
 
+                    # 当前批次全部不是 OpenAI 发件人时，立即结束本轮等待，交给上层触发重发
+                    if not self.email_parser.has_openai_sender(emails):
+                        logger.info(
+                            f"[{email}] 当前邮件批次未发现 OpenAI 发件人，提前结束等待并触发重发"
+                        )
+                        raise OTPNoOpenAISenderEmailServiceError()
+
                     # 从邮件中查找验证码
                     code = self.email_parser.find_verification_code_in_emails(
                         emails,
                         target_email=email,
                         min_timestamp=min_timestamp,
+                        require_recipient_match=require_recipient_match,
                         used_codes=used_codes,
                     )
 
@@ -372,6 +382,8 @@ class OutlookService(BaseEmailService):
                         return code
 
             except Exception as e:
+                if isinstance(e, OTPNoOpenAISenderEmailServiceError):
+                    raise
                 logger.warning(f"[{email}] 检查出错: {e}")
 
             # 等待下次轮询

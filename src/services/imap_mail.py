@@ -5,17 +5,16 @@ IMAP 邮箱服务
 """
 
 import imaplib
-import email
+import email as py_email
 import re
 import time
 import logging
 from email.header import decode_header
 from typing import Any, Dict, Optional
 
-from .base import BaseEmailService, EmailServiceError, get_email_code_settings
+from .base import BaseEmailService, EmailServiceError, OTPNoOpenAISenderEmailServiceError, get_email_code_settings
 from ..config.constants import (
     EmailServiceType,
-    OPENAI_EMAIL_SENDERS,
     OTP_CODE_SEMANTIC_PATTERN,
     OTP_CODE_PATTERN,
 )
@@ -85,15 +84,7 @@ class ImapMailService(BaseEmailService):
 
     def _is_openai_sender(self, from_addr: str) -> bool:
         """判断发件人是否为 OpenAI"""
-        from_lower = from_addr.lower()
-        for sender in OPENAI_EMAIL_SENDERS:
-            if sender.startswith("@") or sender.startswith("."):
-                if sender in from_lower:
-                    return True
-            else:
-                if sender in from_lower:
-                    return True
-        return False
+        return self._is_openai_sender_value(from_addr)
 
     def _extract_otp(self, text: str) -> Optional[str]:
         """从文本中提取 6 位验证码，优先语义匹配，回退简单匹配"""
@@ -126,7 +117,7 @@ class ImapMailService(BaseEmailService):
         poll_interval = get_email_code_settings()["poll_interval"]
         start_time = time.time()
         seen_ids: set = set()
-        mail = None
+        mail: Optional[imaplib.IMAP4] = None
 
         try:
             mail = self._connect()
@@ -141,24 +132,32 @@ class ImapMailService(BaseEmailService):
                         continue
 
                     msg_ids = data[0].split()
+                    seen_any_message = False
+                    found_openai_sender = False
                     for msg_id in reversed(msg_ids):  # 最新的优先
                         id_str = msg_id.decode()
                         if id_str in seen_ids:
                             continue
                         seen_ids.add(id_str)
+                        seen_any_message = True
 
                         # 获取邮件
                         status, msg_data = mail.fetch(msg_id, "(RFC822)")
                         if status != "OK" or not msg_data:
                             continue
 
-                        raw = msg_data[0][1]
-                        msg = email.message_from_bytes(raw)
+                        first_part = msg_data[0]
+                        if not isinstance(first_part, tuple) or len(first_part) < 2 or first_part[1] is None:
+                            continue
+
+                        raw = first_part[1]
+                        msg = py_email.message_from_bytes(raw)
 
                         # 检查发件人
                         from_addr = self._decode_str(msg.get("From", ""))
                         if not self._is_openai_sender(from_addr):
                             continue
+                        found_openai_sender = True
 
                         # 提取验证码
                         body = self._get_text_body(msg)
@@ -170,17 +169,23 @@ class ImapMailService(BaseEmailService):
                             logger.info(f"IMAP 获取验证码成功: {code}")
                             return code
 
+                    if seen_any_message and not found_openai_sender:
+                        raise OTPNoOpenAISenderEmailServiceError()
+
                 except imaplib.IMAP4.error as e:
                     logger.debug(f"IMAP 搜索邮件失败: {e}")
                     # 尝试重新连接
                     try:
-                        mail.select("INBOX")
+                        if mail is not None:
+                            mail.select("INBOX")
                     except Exception:
                         pass
 
                 time.sleep(poll_interval)
 
         except Exception as e:
+            if isinstance(e, OTPNoOpenAISenderEmailServiceError):
+                raise
             logger.warning(f"IMAP 连接/轮询失败: {e}")
             self.update_status(False, str(e))
         finally:

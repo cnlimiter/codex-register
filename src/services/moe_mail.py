@@ -10,7 +10,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin
 
-from .base import BaseEmailService, EmailServiceError, EmailServiceType, RateLimitedEmailServiceError, get_email_code_settings
+from .base import BaseEmailService, EmailServiceError, EmailServiceType, OTPNoOpenAISenderEmailServiceError, RateLimitedEmailServiceError, get_email_code_settings
 from ..core.http_client import HTTPClient, RequestConfig
 from ..config.constants import OTP_CODE_PATTERN
 
@@ -327,6 +327,13 @@ class MeoMailEmailService(BaseEmailService):
                     ) if isinstance(item, dict) else None,
                 )
 
+                if ordered_messages:
+                    if not self._batch_has_openai_sender(
+                        ordered_messages,
+                        lambda item: item.get("from_address") if isinstance(item, dict) else None,
+                    ):
+                        raise OTPNoOpenAISenderEmailServiceError()
+
                 for message in ordered_messages:
                     message_id = message.get("id")
                     if not message_id or message_id in seen_message_ids:
@@ -353,7 +360,7 @@ class MeoMailEmailService(BaseEmailService):
                     content = f"{sender} {subject} {message_content}"
 
                     # 检查是否是 OpenAI 邮件
-                    if "openai" not in sender and "openai" not in content.lower():
+                    if not self._is_openai_candidate_message(sender, subject, message_content):
                         continue
 
                     # 提取验证码 过滤掉邮箱
@@ -368,6 +375,8 @@ class MeoMailEmailService(BaseEmailService):
                         return code
 
             except Exception as e:
+                if isinstance(e, OTPNoOpenAISenderEmailServiceError):
+                    raise
                 logger.debug(f"检查邮件时出错: {e}")
 
             # 等待一段时间再检查

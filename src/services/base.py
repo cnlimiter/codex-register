@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from ..config.constants import EmailServiceType, OTP_CODE_PATTERN, OTP_CODE_SEMANTIC_PATTERN
+from ..config.constants import EmailServiceType, OPENAI_EMAIL_SENDERS, OTP_CODE_PATTERN, OTP_CODE_SEMANTIC_PATTERN
 from ..config.settings import get_settings
 
 
@@ -30,6 +30,7 @@ def get_email_code_settings() -> dict:
     }
 EMAIL_PROVIDER_BACKOFF_MAX_SECONDS = 3600
 OTP_TIMEOUT_ERROR_PREFIX = "OTP_TIMEOUT"
+OTP_NO_OPENAI_SENDER_ERROR = "OTP_NO_OPENAI_SENDER"
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,14 @@ class OTPTimeoutEmailServiceError(EmailServiceError):
     """OTP 验证码等待超时。"""
 
     def __init__(self, message: str, error_code: str = OTP_TIMEOUT_ERROR_PREFIX):
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class OTPNoOpenAISenderEmailServiceError(EmailServiceError):
+    """当前轮询批次未发现 OpenAI 发件人，建议立即重发验证码。"""
+
+    def __init__(self, message: str = "当前邮件批次未发现 OpenAI 发件人", error_code: str = OTP_NO_OPENAI_SENDER_ERROR):
         super().__init__(message)
         self.error_code = error_code
 
@@ -312,6 +321,42 @@ class BaseEmailService(abc.ABC):
 
         return None
 
+    def _is_openai_sender_value(self, sender: Any) -> bool:
+        """判断单个发件人字段是否属于 OpenAI。"""
+        sender_text = str(sender or "").strip().lower()
+        if not sender_text:
+            return False
+
+        for known_sender in OPENAI_EMAIL_SENDERS:
+            normalized = known_sender.lower()
+            if normalized.startswith(("@", ".")):
+                if normalized in sender_text:
+                    return True
+            elif normalized in sender_text:
+                return True
+        return False
+
+    def _message_mentions_openai(self, *parts: Any) -> bool:
+        """判断若干文本片段中是否提及 OpenAI。"""
+        combined = "\n".join(str(part or "") for part in parts if part is not None).lower()
+        return "openai" in combined if combined else False
+
+    def _is_openai_candidate_message(self, sender: Any = None, *content_parts: Any) -> bool:
+        """判断单封邮件是否可作为 OpenAI 验证码候选邮件。"""
+        return self._is_openai_sender_value(sender) or self._message_mentions_openai(sender, *content_parts)
+
+    def _batch_has_openai_sender(self, items: List[Any], sender_getter) -> bool:
+        """判断当前批次邮件是否至少有一封来自 OpenAI 发件人。"""
+        found_sender_field = False
+        for item in items:
+            sender = sender_getter(item)
+            if sender in (None, ""):
+                continue
+            found_sender_field = True
+            if self._is_openai_sender_value(sender):
+                return True
+        return not found_sender_field
+
     def _get_used_verification_codes(self, email: str) -> set:
         """获取邮箱对应的已使用验证码集合。"""
         key = str(email or "").strip().lower()
@@ -470,7 +515,6 @@ class BaseEmailService(abc.ABC):
             邮件信息字典，如果超时返回 None
         """
         import time
-        from datetime import datetime
 
         start_time = time.time()
         last_email_id = None

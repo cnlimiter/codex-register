@@ -285,6 +285,12 @@ def _normalize_email_service_config(
     if service_type == EmailServiceType.MOE_MAIL:
         if 'domain' in normalized and 'default_domain' not in normalized:
             normalized['default_domain'] = normalized.pop('domain')
+    elif service_type == EmailServiceType.OUTLOOK:
+        settings = get_settings()
+        normalized.setdefault('provider_priority', settings.outlook_provider_priority)
+        normalized.setdefault('health_failure_threshold', settings.outlook_health_failure_threshold)
+        normalized.setdefault('health_disable_duration', settings.outlook_health_disable_duration)
+        normalized.setdefault('require_recipient_match', settings.outlook_require_recipient_match)
     elif service_type in (EmailServiceType.TEMP_MAIL, EmailServiceType.FREEMAIL):
         if 'default_domain' in normalized and 'domain' not in normalized:
             normalized['domain'] = normalized.pop('default_domain')

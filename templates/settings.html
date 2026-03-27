@@ -581,6 +581,12 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                                     <input type="number" id="email-code-resend-max-retries" name="resend_max_retries" value="2" min="0" max="10">
                                     <span class="hint">收件箱未找到验证码时，最多重新触发发送的次数</span>
                                 </div>
+
+                                <div class="form-group">
+                                    <label for="email-code-non-openai-sender-resend-max-retries">非 OpenAI 发件人最多重发次数</label>
+                                    <input type="number" id="email-code-non-openai-sender-resend-max-retries" name="non_openai_sender_resend_max_retries" value="1" min="0" max="10">
+                                    <span class="hint">检测到疑似干扰邮件但发件人不是 OpenAI 时，单独允许重新触发发送的次数</span>
+                                </div>
                             </div>
 
                             <div class="form-actions">

@@ -54,45 +54,6 @@
                 </div>
             </div>
 
-            <!-- Outlook 管理 -->
-            <div class="card">
-                <div class="card-header">
-                    <h3>📥 Outlook 批量导入</h3>
-                    <button class="btn btn-ghost btn-sm" id="toggle-outlook-import">展开</button>
-                </div>
-                <div class="card-body" id="outlook-import-body" style="display: none;">
-                    <div class="import-info">
-                        <p><strong>支持格式：</strong></p>
-                        <ul>
-                            <li><code>邮箱----密码</code> （密码认证）</li>
-                            <li><code>邮箱----密码----client_id----refresh_token</code> （XOAUTH2 认证，推荐）</li>
-                        </ul>
-                        <p>每行一个账户，使用四个连字符（----）分隔字段。以 # 开头的行将被忽略。</p>
-                    </div>
-                    <div class="form-group">
-                        <label for="outlook-import-data">批量导入数据</label>
-                        <textarea id="outlook-import-data" rows="8" placeholder="example@outlook.com----password123&#10;test@outlook.com----password456----client_id----refresh_token"></textarea>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>
-                                <input type="checkbox" id="outlook-import-enabled" checked>
-                                导入后启用
-                            </label>
-                        </div>
-                        <div class="form-group">
-                            <label for="outlook-import-priority">优先级</label>
-                            <input type="number" id="outlook-import-priority" value="0" min="0">
-                        </div>
-                    </div>
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-primary" id="outlook-import-btn">📥 开始导入</button>
-                        <button type="button" class="btn btn-secondary" id="clear-import-btn">清空</button>
-                    </div>
-                    <div id="import-result" style="display: none; margin-top: var(--spacing-md);"></div>
-                </div>
-            </div>
-
             <!-- 自定义邮箱管理（含 MoeMail / TempMail / DuckMail） -->
             <div class="card">
                 <div class="card-header">
@@ -133,7 +94,10 @@
             <div class="card">
                 <div class="card-header">
                     <h3>📧 Outlook 账户列表</h3>
-                    <button class="btn btn-danger btn-sm" id="batch-delete-outlook-btn" disabled>🗑️ 批量删除</button>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-primary btn-sm" id="add-outlook-btn">➕ 添加邮箱</button>
+                        <button class="btn btn-danger btn-sm" id="batch-delete-outlook-btn" disabled>🗑️ 批量删除</button>
+                    </div>
                 </div>
                 <div class="card-body" style="padding: 0;">
                     <div class="table-container">
@@ -556,7 +520,49 @@
     </div>
 
 
-<script src="/static/js/utils.js?v={{ static_version }}"></script>
+<!-- Outlook 批量导入模态框 -->
+    <div class="modal" id="outlook-import-modal">
+        <div class="modal-content" style="max-width: 560px;">
+            <div class="modal-header">
+                <h3>📥 批量添加 Outlook 账户</h3>
+                <button class="modal-close" id="close-outlook-import-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="import-info" style="margin-bottom: var(--spacing-md);">
+                    <p><strong>支持格式：</strong></p>
+                    <ul>
+                        <li><code>邮箱----密码</code> （密码认证）</li>
+                        <li><code>邮箱----密码----client_id----refresh_token</code> （XOAUTH2 认证，推荐）</li>
+                    </ul>
+                    <p style="color: var(--text-muted); font-size: 0.875rem;">每行一个账户，使用四个连字符（----）分隔字段。以 # 开头的行将被忽略。</p>
+                </div>
+                <div class="form-group">
+                    <label for="outlook-import-data">批量导入数据</label>
+                    <textarea id="outlook-import-data" rows="8" placeholder="example@outlook.com----password123&#10;test@outlook.com----password456----client_id----refresh_token"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="outlook-import-enabled" checked>
+                            导入后启用
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="outlook-import-priority">优先级</label>
+                        <input type="number" id="outlook-import-priority" value="0" min="0">
+                    </div>
+                </div>
+                <div id="import-result" style="display: none; margin-top: var(--spacing-md);"></div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
+                <button type="button" class="btn btn-primary" id="outlook-import-btn">📥 开始导入</button>
+                <button type="button" class="btn btn-secondary" id="clear-import-btn">清空</button>
+                <button type="button" class="btn btn-secondary" id="cancel-outlook-import-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/utils.js?v={{ static_version }}"></script>
     <script src="/static/js/email_services.js?v={{ static_version }}"></script>
 </body>
 </html>

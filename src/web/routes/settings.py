@@ -4,7 +4,7 @@
 
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -108,6 +108,8 @@ async def get_all_settings():
         "email_code": {
             "timeout": settings.email_code_timeout,
             "poll_interval": settings.email_code_poll_interval,
+            "resend_max_retries": settings.email_code_resend_max_retries,
+            "non_openai_sender_resend_max_retries": settings.email_code_non_openai_sender_resend_max_retries,
         },
     }
 
@@ -387,6 +389,7 @@ class EmailCodeSettings(BaseModel):
     timeout: int = 120  # 验证码等待超时（秒）
     poll_interval: int = 3  # 验证码轮询间隔（秒）
     resend_max_retries: int = 2  # 收件箱未找到验证码时最多重新发送次数
+    non_openai_sender_resend_max_retries: int = 1  # 非 OpenAI 发件人导致的最多重新发送次数
 
 
 @router.get("/tempmail")
@@ -425,6 +428,7 @@ async def get_email_code_settings():
         "timeout": settings.email_code_timeout,
         "poll_interval": settings.email_code_poll_interval,
         "resend_max_retries": settings.email_code_resend_max_retries,
+        "non_openai_sender_resend_max_retries": settings.email_code_non_openai_sender_resend_max_retries,
     }
 
 
@@ -439,11 +443,14 @@ async def update_email_code_settings(request: EmailCodeSettings):
 
     if request.resend_max_retries < 0 or request.resend_max_retries > 10:
         raise HTTPException(status_code=400, detail="重发次数必须在 0-10 之间")
+    if request.non_openai_sender_resend_max_retries < 0 or request.non_openai_sender_resend_max_retries > 10:
+        raise HTTPException(status_code=400, detail="非 OpenAI 发件人重发次数必须在 0-10 之间")
 
     update_settings(
         email_code_timeout=request.timeout,
         email_code_poll_interval=request.poll_interval,
         email_code_resend_max_retries=request.resend_max_retries,
+        email_code_non_openai_sender_resend_max_retries=request.non_openai_sender_resend_max_retries,
     )
 
     return {"success": True, "message": "验证码等待设置已更新"}
@@ -842,6 +849,10 @@ async def disable_proxy(proxy_id: int):
 class OutlookSettings(BaseModel):
     """Outlook 设置"""
     default_client_id: Optional[str] = None
+    provider_priority: Optional[List[str]] = None
+    health_failure_threshold: Optional[int] = None
+    health_disable_duration: Optional[int] = None
+    require_recipient_match: Optional[bool] = None
 
 
 @router.get("/outlook")
@@ -854,6 +865,7 @@ async def get_outlook_settings():
         "provider_priority": settings.outlook_provider_priority,
         "health_failure_threshold": settings.outlook_health_failure_threshold,
         "health_disable_duration": settings.outlook_health_disable_duration,
+        "require_recipient_match": settings.outlook_require_recipient_match,
     }
 
 
@@ -864,6 +876,14 @@ async def update_outlook_settings(request: OutlookSettings):
 
     if request.default_client_id is not None:
         update_dict["outlook_default_client_id"] = request.default_client_id
+    if request.provider_priority is not None:
+        update_dict["outlook_provider_priority"] = request.provider_priority
+    if request.health_failure_threshold is not None:
+        update_dict["outlook_health_failure_threshold"] = request.health_failure_threshold
+    if request.health_disable_duration is not None:
+        update_dict["outlook_health_disable_duration"] = request.health_disable_duration
+    if request.require_recipient_match is not None:
+        update_dict["outlook_require_recipient_match"] = request.require_recipient_match
 
     if update_dict:
         update_settings(**update_dict)
