@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RequestConfig:
     """HTTP 请求配置"""
-    timeout: int = 30
+    timeout: int = 10  # 降低默认超时，让 Ctrl+C 响应更快
     max_retries: int = 3
     retry_delay: float = 1.0
     impersonate: str = "chrome"

@@ -5,6 +5,7 @@ FastAPI 应用主文件
 
 import logging
 import sys
+import signal
 import secrets
 import hmac
 import hashlib
@@ -25,6 +26,34 @@ from .routes.websocket import router as ws_router
 from .task_manager import task_manager
 
 logger = logging.getLogger(__name__)
+
+# 优雅退出标志
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    """信号处理器：Ctrl+C 时优雅退出"""
+    global _shutdown_requested
+    if _shutdown_requested:
+        logger.warning("收到第二次退出信号，强制退出")
+        sys.exit(1)
+    
+    _shutdown_requested = True
+    logger.info("收到退出信号，正在关闭...")
+    
+    # 取消所有运行中的任务
+    from .task_manager import _task_cancelled
+    for task_uuid in list(_task_cancelled.keys()):
+        task_manager.cancel_task(task_uuid)
+    
+    logger.info("已取消所有运行中的任务")
+    sys.exit(0)
+
+
+# 注册信号处理器
+signal.signal(signal.SIGINT, _signal_handler)
+if hasattr(signal, "SIGTERM"):
+    signal.signal(signal.SIGTERM, _signal_handler)
 
 # 获取项目根目录
 # PyInstaller 打包后静态资源在 sys._MEIPASS，开发时在源码根目录
